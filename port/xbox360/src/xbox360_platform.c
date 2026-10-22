@@ -45,6 +45,9 @@ static void xbox360_startup(void)
 	developer tools a second of a triangle; a normal build draws nothing
 	here) */
 	x360_video_probe();
+	/* (the network's self-test and the game list, in the background: lines
+	"net test: ..." in port.txt) */
+	x360_online_start();
 	x360_log("platform layer up; the game starts");
 }
 

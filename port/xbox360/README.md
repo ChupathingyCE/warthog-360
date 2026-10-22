@@ -4,7 +4,7 @@
 
 ## Status
 
-Blood Gulch loads, draws and plays (driven in a Ghost on hardware, still a little laggy). The multiplayer baseline (a game started and played on the console) is in progress. The campaign is not a goal yet. There is no high-res HUD on the 360: it is built without the high-res HUD's pictures, and the maps' own HUD is drawn. The build is a console build (`HALO_CONSOLE`): the desktop extras stay out until the baseline holds, then come back one at a time. It is sized for the 360's 512 MB, not the original Xbox's 64 MB.
+Blood Gulch loads, draws and plays (driven in a Ghost on hardware, still a little laggy). Networking is new and untested on hardware (below). The multiplayer baseline (a game started and played on the console) is in progress. The campaign is not a goal yet. There is no high-res HUD on the 360: it is built without the high-res HUD's pictures, and the maps' own HUD is drawn. The build is a console build (`HALO_CONSOLE`): the desktop extras stay out until the baseline holds, then come back one at a time. It is sized for the 360's 512 MB, not the original Xbox's 64 MB.
 
 Known issues, under investigation:
 
@@ -63,16 +63,21 @@ python3 chupathingyce/tools/tag_swap_generate.py --build . --maps /path/to/maps
 sh chupathingyce/port/console/tests/run_tag_byte_swap_test.sh /path/to/maps/bloodgulch.map
 ```
 
-## Networking (next)
+## Networking
 
-Not started on the console yet. What the owner's Butter and Jelly (a Jellyfin client that runs networking and verified HTTPS on an RGH 360) learned the hard way:
+Untested on hardware. The network comes up as the owner's Butter and Jelly (a Jellyfin client that runs networking and verified HTTPS on an RGH 360) brings it up, in `src/x360_net.c`:
 
-- Every socket needs `setsockopt` `SO_UNENCRYPTED` (0x5801), or the console encrypts what it sends and drops replies while reporting success. `XNET_STARTUP_BYPASS_SECURITY` alone is not enough (`src/x360_net.c` sets only that today).
-- `socket()` must name `IPPROTO_TCP` or `IPPROTO_UDP`: protocol 0 gives a handle that never connects.
-- Endian guards key on `_XENON`, not `_XBOX`, which both Xbox consoles define.
-- HTTPS works through libcurl and mbedTLS, with an SDK compatibility shim and `MBEDTLS_PLATFORM_TIME_ALT`.
+- XNet starts with `XNET_STARTUP_BYPASS_SECURITY`, restarted on those terms if it was already up, then Winsock, then a wait of up to 8 seconds for the console's address.
+- Every socket gets `setsockopt` `SO_UNENCRYPTED` (0x5801): without it the console encrypts what it sends and drops replies while reporting success. The startup flag alone is not enough.
+- `socket()` always names `IPPROTO_TCP` or `IPPROTO_UDP`: protocol 0 gives a handle that never connects.
+- DNS is `XNetDnsLookup`, polled until it is done; a connecting socket that `select` leaves out of the writable set is asked with `getpeername`.
+- `XNetStartupParams` and `XNADDR` come from the console's own SDK headers, so their sizes are the linked `xnet.lib`'s. The game's own XNet calls never reach the SDK: they are the platform layer's (the game's `port/linux/src/xnet.c`, renamed in `include/halo_xbox360_api_names.h`).
 
-Then a big-endian audit of the network messages, before the 360 joins games with the PCs.
+At start-up a self-test runs on a thread of its own (`src/x360_online.c`) and logs `net test:` lines to `port.txt` and the debug channel: XNet and the link, a UDP datagram to the console's own port read back, `warthog.milenko.org` looked up, and `GET /v1/console/games?packs=1` over plain HTTP. That list is the Multiplayer menu's ONLINE GAMES (`game/x360_browser_screen.c`, `HALO_CONSOLE_ONLINE_GAMES`): the original Xbox's screen and list parser (ChupathingyCE/warthog-xbox), joining a game through its invite and internet play's tunnel, as on the Xbox. X refreshes, B goes back.
+
+Byte order: the network is big-endian, which the 360 already is. The game's transport addresses and ports, message headers and encoded messages, and the platform layer's `htonl`/`htons`, `inet_addr` and internet play's helpers swap only on little-endian machines (the game's `NETWORK_SWAP2`/`NETWORK_SWAP4`, `HALO_BIG_ENDIAN`). Still to do before a whole game with the PCs: the port's distributed netcode (the game's `port/linux/game/network_*.c`) sends its messages as the machine's own structures, so a 360 reads a PC host's game-time, positions and counts in the wrong byte order. Those messages need a wire layer of their own.
+
+Logs never show an address, only its kind (private, public).
 
 ## Notes for the port
 

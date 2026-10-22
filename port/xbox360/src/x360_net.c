@@ -6,10 +6,28 @@ what posix_net.c gives the desktop builds and win32_net.c the Windows
 build. The game's Winsock and XNet are the desktop platform layer's
 (port/linux/src/xnet.c), which calls these.
 
-XNet starts insecure (XNET_STARTUP_BYPASS_SECURITY), as the original Xbox
-build's does with bypass_security.txt: plain UDP and TCP with the PCs, the
-game list and the internet, which a secure XNet refuses. Never an address
-in the log (only its kind).
+The network is brought up as the owner's Butter and Jelly does it on an
+RGH console (its src/platform/xenon/platform_xenon.cpp, StartNetwork, and
+third_party/xdkcompat/xenon_winsock.c; GPL-2.0-or-later, by the same
+author), which talks to LAN and internet servers from the same consoles:
+
+- XNet starts insecure (XNET_STARTUP_BYPASS_SECURITY), restarted on those
+  terms if something started it first; then Winsock; then a wait of up to
+  8 seconds for the title's address (connecting before it has one hangs
+  instead of failing).
+- Every socket is marked unencrypted (SO_UNENCRYPTED, 0x5801, undocumented):
+  without it the console encrypts what it sends and drops the replies while
+  every call reports success. The startup flag alone is not enough.
+- socket() always names its protocol (IPPROTO_TCP or IPPROTO_UDP): with 0
+  the console hands back a socket that never connects.
+- A host is looked up with XNetDnsLookup, polled until it is no longer in
+  progress.
+- A non-blocking connect that select does not report writable is asked with
+  getpeername.
+
+The result is plain UDP and TCP with the PCs, the game list and the
+internet, which a secure XNet refuses. Never an address in the log (only
+its kind).
 */
 
 #include <xtl.h>
@@ -23,6 +41,15 @@ in the log (only its kind).
 #include "x360_port.h"
 
 static volatile LONG network_state; /* 0 not started, 1 starting, 2 up, 3 failed */
+
+/* the console's per-socket "send this in the clear" option (Butter and
+Jelly's BJ_SO_UNENCRYPTED; not in the SDK's headers) */
+#define X360_SO_UNENCRYPTED 0x5801
+/* the longest wait for the title's address after Winsock starts */
+#define ADDRESS_WAIT_MS 8000
+#define ADDRESS_POLL_MS 250
+/* the longest wait for a host's lookup */
+#define DNS_WAIT_MS 5000
 
 static const char *address_kind(unsigned long address)
 {
@@ -56,7 +83,17 @@ int x360_network_start(void)
 	result = XNetStartup(&parameters);
 	if (result != 0)
 	{
-		x360_log("network: XNetStartup failed (%d)", result);
+		/* (something started XNet first, maybe without the bypass: LAN and
+		internet packets would be dropped while every call succeeds; started
+		again on these terms) */
+		x360_log("network: XNetStartup returned %d; restarting it", result);
+		XNetCleanup();
+		result = XNetStartup(&parameters);
+	}
+	x360_log("network: XNetStartup -> %d, security bypassed (parameters %u bytes, the SDK's)", result,
+		(unsigned)sizeof(parameters));
+	if (result != 0)
+	{
 		network_state = 3;
 		return 0;
 	}
@@ -64,24 +101,31 @@ int x360_network_start(void)
 	if (result != 0)
 	{
 		x360_log("network: WSAStartup failed (%d)", result);
+		XNetCleanup();
 		network_state = 3;
 		return 0;
 	}
 	link = XNetGetEthernetLinkStatus();
-	for (waited = 0; waited < 8000; waited += 100)
+	x360_log("network: link%s%s%s", (link & XNET_ETHERNET_LINK_ACTIVE) ? " active" : " DOWN",
+		(link & XNET_ETHERNET_LINK_WIRELESS) ? " wireless" : "", (link & XNET_ETHERNET_LINK_100MBPS) ? " 100Mbps" : "");
+	/* (the title's address: PENDING while the interface comes up) */
+	for (waited = 0; waited < ADDRESS_WAIT_MS; waited += ADDRESS_POLL_MS)
 	{
 		memset(&address, 0, sizeof(address));
 		status = XNetGetTitleXnAddr(&address);
 		if (status != XNET_GET_XNADDR_PENDING)
 			break;
-		Sleep(100);
+		Sleep(ADDRESS_POLL_MS);
 	}
-	if (status == XNET_GET_XNADDR_PENDING || status == XNET_GET_XNADDR_NONE || !address.ina.s_addr)
-		x360_log("network: link %s, no address yet", (link & XNET_ETHERNET_LINK_ACTIVE) ? "up" : "down");
+	if (status == XNET_GET_XNADDR_PENDING)
+		x360_log("network: no address after %d ms; the interface never came up", ADDRESS_WAIT_MS);
+	else if ((status & XNET_GET_XNADDR_NONE) || !address.ina.s_addr)
+		x360_log("network: no address after %d ms (status 0x%08lx)", waited, (unsigned long)status);
 	else
-		x360_log("network: link %s%s, a %s address (%d ms)", (link & XNET_ETHERNET_LINK_ACTIVE) ? "up" : "down",
-			(link & XNET_ETHERNET_LINK_WIRELESS) ? " (wireless)" : "",
-			address_kind((unsigned long)ntohl(address.ina.s_addr)), waited);
+		x360_log("network: a %s address after %d ms (status 0x%08lx%s%s%s)",
+			address_kind((unsigned long)ntohl(address.ina.s_addr)), waited, (unsigned long)status,
+			(status & XNET_GET_XNADDR_DHCP) ? " dhcp" : "", (status & XNET_GET_XNADDR_GATEWAY) ? " gateway" : "",
+			(status & XNET_GET_XNADDR_DNS) ? " dns" : " no-dns");
 	network_state = 2;
 	return 1;
 }
@@ -149,9 +193,30 @@ int posix_socket(int family, int type, int protocol)
 		WSASetLastError(WSAENETDOWN);
 		return -1;
 	}
+	/* (the protocol always named: with 0 the console's socket never
+	connects) */
+	if (protocol == 0)
+	{
+		if (type == SOCK_STREAM)
+			protocol = IPPROTO_TCP;
+		else if (type == SOCK_DGRAM)
+			protocol = IPPROTO_UDP;
+	}
 	handle = socket(family, type, protocol);
 	if (handle == INVALID_SOCKET)
 		return -1;
+	{
+		/* (in the clear: XNET_STARTUP_BYPASS_SECURITY alone still encrypts
+		what a socket sends) */
+		static int told;
+		BOOL plain = TRUE;
+
+		if (setsockopt(handle, SOL_SOCKET, X360_SO_UNENCRYPTED, (const char *)&plain, sizeof(plain)) != 0 && !told)
+		{
+			told = 1;
+			x360_log("network: a socket could not be marked unencrypted (%d)", WSAGetLastError());
+		}
+	}
 	if (type == SOCK_DGRAM)
 	{
 		/* (a datagram socket may broadcast: system link's searches) */
@@ -307,9 +372,10 @@ static void keep_ready(fd_set *set, int *handles, int *count)
 int posix_socket_select(int *read, int *read_count, int *write, int *write_count, int *error, int *error_count,
 	posix_long timeout_seconds, posix_long timeout_microseconds, int infinite)
 {
-	fd_set read_set, write_set, error_set;
+	fd_set read_set, write_set, error_set, asked_write;
 	struct timeval timeout;
 	int result;
+	unsigned index;
 
 	fill_set(&read_set, read, read ? *read_count : 0);
 	fill_set(&write_set, write, write ? *write_count : 0);
@@ -323,10 +389,27 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 			Sleep((DWORD)(timeout_seconds * 1000 + timeout_microseconds / 1000));
 		return 0;
 	}
+	asked_write = write_set;
 	result = select(0, read ? &read_set : NULL, write ? &write_set : NULL, error ? &error_set : NULL,
 		infinite ? NULL : &timeout);
 	if (result == SOCKET_ERROR)
 		return -1;
+	/* (a connected socket answers getpeername, one still connecting does
+	not: the console's select can leave a connected socket out of the
+	writable set) */
+	for (index = 0; write && index < asked_write.fd_count; index++)
+	{
+		SOCKET handle = asked_write.fd_array[index];
+		struct sockaddr_in peer;
+		int length = sizeof(peer);
+
+		if (FD_ISSET(handle, &write_set) || (error && FD_ISSET(handle, &error_set)))
+			continue;
+		if (getpeername(handle, (struct sockaddr *)&peer, &length) != 0)
+			continue;
+		FD_SET(handle, &write_set);
+		result++;
+	}
 	if (read)
 		keep_ready(&read_set, read, read_count);
 	if (write)
@@ -352,24 +435,22 @@ posix_ulong posix_resolve_ipv4(const char *host)
 {
 	unsigned long address = inet_addr(host);
 	XNDNS *lookup = NULL;
-	WSAEVENT event;
+	DWORD deadline;
 	posix_ulong result = 0;
 
 	if (address != INADDR_NONE)
 		return address;
 	if (!x360_network_start())
 		return 0;
-	event = WSACreateEvent();
-	if (XNetDnsLookup(host, event, &lookup) != 0 || !lookup)
-	{
-		WSACloseEvent(event);
+	/* (no event: XNet answers in the background, polled until it is done) */
+	if (XNetDnsLookup(host, NULL, &lookup) != 0 || !lookup)
 		return 0;
-	}
-	WaitForSingleObject(event, 10000);
+	deadline = GetTickCount() + DNS_WAIT_MS;
+	while (lookup->iStatus == WSAEINPROGRESS && (long)(deadline - GetTickCount()) > 0)
+		Sleep(20);
 	if (lookup->iStatus == 0 && lookup->cina > 0)
 		result = lookup->aina[0].s_addr;
 	XNetDnsRelease(lookup);
-	WSACloseEvent(event);
 	return result;
 }
 

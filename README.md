@@ -32,8 +32,10 @@ original Xbox's: multiplayer first, extras added one at a time after that.
 
 - **Multiplayer baseline:** Blood Gulch loads, draws and plays. It is still
   laggy. The campaign is not a goal yet.
-- **Networking next:** sockets on RGH consoles, and a big-endian audit of
-  the network messages, before the 360 joins games with the PCs.
+- **Networking:** in testing. Sockets as RGH homebrew needs them, a
+  start-up network self-test, and ONLINE GAMES listing the console game
+  list. Joining a PC's game still needs the gameplay messages made
+  big-endian safe.
 - **Memory:** sized for the 360's 512 MB, not the original Xbox's 64 MB.
   The game's Xbox memory is a 256 MB window of it.
 - **No high-res HUD:** the 360 draws the maps' own HUD and fonts. The
