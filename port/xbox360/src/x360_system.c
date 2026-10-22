@@ -701,6 +701,13 @@ const char *SDL_GetError(void)
 	return "not on the Xbox 360";
 }
 
+/* milliseconds since the console started (the movies' clock, the game's
+port/linux/src/bink_ffmpeg.c) */
+unsigned long long SDL_GetTicks(void)
+{
+	return GetTickCount();
+}
+
 void SDL_free(void *memory)
 {
 	free(memory);

@@ -141,6 +141,11 @@ GAME_FLAGS = [
     "-Wno-error=return-type",
 ]
 
+# the menus' map list and the Xbox map packs (maps_<pack>: Halo CE+), as the
+# original Xbox and the desktop builds have them (the game's
+# port/linux/game/ui_map_list.c, map_packs.c); the console list's packs=1
+MAP_LIST_DEFINES = ["-DHALO_MAP_LIST"]
+
 PLATFORM_FLAGS = [
     "-std=gnu11",
     "-DHALO_LINUX_PLATFORM_LAYER",
@@ -461,6 +466,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         *GAME_ABI_FLAGS,
         *GAME_FLAGS,
         *defines,
+        *MAP_LIST_DEFINES,
         file_names,
         f"-include {_quote(prefix_header)}",
         f"-include {_quote(semantics_header)}",
@@ -480,6 +486,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         *GAME_ABI_FLAGS,
         *PLATFORM_FLAGS,
         *defines,
+        *MAP_LIST_DEFINES,
         file_names,
         version_define,
         f"-include {_quote(prefix_header)}",
@@ -547,6 +554,9 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     # the consoles' shared game code: the maps' byte order
     for source in sorted((game / CONSOLE_DIR / "game").glob("*.c")):
         add_object(source, game_cflags, [*implicit_common, semantics_header])
+    # the port's own game code: ONLINE GAMES (game/x360_browser_screen.c)
+    for source in sorted((PORT_DIR / "game").glob("*.c")):
+        add_object(source, game_cflags, [*implicit_common, semantics_header, PORT_DIR / "include" / "x360_game_list.h"])
     game_objects = objects[game_objects_start:]
 
     platform_objects_start = len(objects)
