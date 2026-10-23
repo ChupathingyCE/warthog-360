@@ -4,7 +4,7 @@
 
 ## Status
 
-Blood Gulch loads, draws and plays (driven in a Ghost on hardware, still a little laggy). Networking is new and untested on hardware (below). The multiplayer baseline (a game started and played on the console) is in progress. The campaign is not a goal yet. There is no high-res HUD on the 360: it is built without the high-res HUD's pictures, and the maps' own HUD is drawn. The build is a console build (`HALO_CONSOLE`): the desktop extras stay out until the baseline holds, then come back one at a time. It is sized for the 360's 512 MB, not the original Xbox's 64 MB.
+Blood Gulch loads, draws and plays (driven in a Ghost on hardware, still a little laggy). Networking works on hardware: the console lists and joins servers (below). A multiplayer game plays on the console. The campaign is not a goal yet. There is no high-res HUD on the 360: it is built without the high-res HUD's pictures, and the maps' own HUD is drawn. The build is a console build (`HALO_CONSOLE`): the desktop extras stay out until the baseline holds, then come back one at a time. It is sized for the 360's 512 MB, not the original Xbox's 64 MB.
 
 Known issues, under investigation:
 
@@ -65,7 +65,7 @@ sh chupathingyce/port/console/tests/run_tag_byte_swap_test.sh /path/to/maps/bloo
 
 ## Networking
 
-Untested on hardware. The network comes up as the owner's Butter and Jelly (a Jellyfin client that runs networking and verified HTTPS on an RGH 360) brings it up, in `src/x360_net.c`:
+Works on hardware (RGH). The network comes up as the owner's Butter and Jelly (a Jellyfin client that runs networking and verified HTTPS on an RGH 360) brings it up, in `src/x360_net.c`:
 
 - XNet starts with `XNET_STARTUP_BYPASS_SECURITY`, restarted on those terms if it was already up, then Winsock, then a wait of up to 8 seconds for the console's address.
 - Every socket gets `setsockopt` `SO_UNENCRYPTED` (0x5801): without it the console encrypts what it sends and drops replies while reporting success. The startup flag alone is not enough.

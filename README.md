@@ -7,7 +7,7 @@
 <p align="center">
 <a href="https://github.com/ChupathingyCE/chupathingyce">The game (Chupathingy)</a> ·
 <a href="https://github.com/ChupathingyCE/warthog-xbox">Warthog (original Xbox)</a> ·
-<a href="https://halo.milenko.org">Games online now</a> ·
+<a href="https://stats.chupathingy.org">Games online now</a> ·
 <a href="https://discord.gg/chupathingy">Discord</a>
 </p>
 
@@ -22,28 +22,29 @@ kit.
 This repository holds the Xbox 360 port only. The game is the
 `chupathingyce` submodule.
 
-You need your own copy of Halo. No SDK files or game files are included,
-and there is no download yet: you build it yourself.
+You need your own copy of Halo. No SDK files or game files are included.
+There is a test build, shared on the [Discord](https://discord.gg/chupathingy)
+(#xbox-360); you can also build it yourself.
 
 ## Status
 
-**In development.** The first goal is a plain playable baseline, like the
-original Xbox's: multiplayer first, extras added one at a time after that.
+**Test build.** Chupathingy plays on an RGH Xbox 360: Blood Gulch and the
+multiplayer maps load, draw and play, and the console lists and joins servers
+online through ONLINE GAMES. It is early and has had little time on hardware.
 
-- **Multiplayer baseline:** Blood Gulch loads, draws and plays. It is still
-  laggy. The campaign is not a goal yet.
-- **Networking:** in testing. Sockets as RGH homebrew needs them, a
-  start-up network self-test (with a byte-order check of the game's messages
-  against the PC's bytes), and ONLINE GAMES listing the console game list.
-  The game's messages go on the wire in the PC's byte order; joining a PC's
-  game is in testing.
+- **Multiplayer:** the focus. The campaign is not a goal yet.
+- **Networking:** joins PC and server games. The game's messages go on the
+  wire in the PC's byte order, and a start-up self-test checks it.
 - **Memory:** sized for the 360's 512 MB, not the original Xbox's 64 MB.
-  The game's Xbox memory is a 256 MB window of it.
 - **No high-res HUD:** the 360 draws the maps' own HUD and fonts. The
-  desktop extras stay out until the baseline holds.
+  desktop extras stay out until the baseline holds, then come back one at a
+  time.
 - **How it draws:** the game's Direct3D 8 goes through the desktop
   renderer's OpenGL, which a GL layer of the port's own puts on the
   console's Direct3D 9, with GLSL turned into HLSL on the console.
+
+Known issues: lag; a film-grain-like noise in the picture over time; HUD and
+reticle vertices popping.
 
 [port/xbox360/README.md](port/xbox360/README.md) has the details, the known
 issues and the developer tools.
@@ -52,7 +53,7 @@ issues and the developer tools.
 
 - **A console that runs your own code.** An RGH or JTAG Xbox 360, started
   from a launcher such as Aurora, or a development kit.
-- **Your own Halo disc's maps.** The original Xbox's North American (NTSC)
+- **Your own Halo maps.** The original Xbox's North American (NTSC)
   release, 01.10.12.2276, as every Chupathingy build and server uses.
   Warthog never provides maps, disc images or other game data, and never
   links to them. Don't share yours.
@@ -61,12 +62,20 @@ issues and the developer tools.
 
 ## Install
 
-1. Build `default.xex` (see "Building it yourself").
+With Aurora (or another launcher for RGH and JTAG consoles):
+
+1. Get `default.xex`: the test build from the Discord, or build it yourself
+   (see "Building it yourself").
 2. Copy the `maps` folder from your own disc to your computer.
 3. Lay the game out: `python3 tools/xbox360_package.py --maps /path/to/maps --out ~/Downloads/Warthog-360`.
    This puts `default.xex` and your maps in one folder.
 4. Copy that folder to the console, for example to `Hdd1:\Games\Warthog360\`.
-5. Start `default.xex` from your launcher.
+5. Add that folder to Aurora's content paths, or start `default.xex` from your launcher's file browser.
+
+The maps are your own NTSC maps (01.10.12.2276) in the `maps` folder beside
+`default.xex`; at least `ui.map` is needed.
+
+To report a problem, tell us in #xbox-360 on the Discord and attach the logs.
 
 The game writes its log to `game:\debug.txt`, and the port's own to
 `game:\port.txt` and the debug channel. Attach them to bug reports.
@@ -180,7 +189,7 @@ The port's history up to this repository is in
 
 - The game: [ChupathingyCE/chupathingyce](https://github.com/ChupathingyCE/chupathingyce)
 - The original Xbox: [ChupathingyCE/warthog-xbox](https://github.com/ChupathingyCE/warthog-xbox)
-- Games online now: [halo.milenko.org](https://halo.milenko.org)
+- Games online now: [stats.chupathingy.org](https://stats.chupathingy.org)
 - Discord: [discord.gg/chupathingy](https://discord.gg/chupathingy)
   (#warthog-support for help, #warthog-dev for development)
 
