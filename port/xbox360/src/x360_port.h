@@ -89,6 +89,11 @@ void x360_pad_rumble(int port, unsigned short left, unsigned short right);
 nonzero if they are up */
 int x360_network_start(void);
 
+/* ---------- the game list (x360_online.c, x360_game_list.h) */
+
+/* the network self-test and the first game list, on a thread of their own */
+void x360_online_start(void);
+
 /* ---------- the screen (x360_video.c) */
 
 /* the Direct3D 9 device (D3DDevice *), made on the first call; NULL if it

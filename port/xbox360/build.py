@@ -141,9 +141,23 @@ GAME_FLAGS = [
     "-Wno-error=return-type",
 ]
 
+# the menus' map list and the Xbox map packs (maps_<pack>: Halo CE+), as the
+# original Xbox and the desktop builds have them (the game's
+# port/linux/game/ui_map_list.c, map_packs.c); the console list's packs=1
+MAP_LIST_DEFINES = ["-DHALO_MAP_LIST"]
+
 PLATFORM_FLAGS = [
     "-std=gnu11",
     "-DHALO_LINUX_PLATFORM_LAYER",
+    # internet play's tunnel (p2p.c) logs what becomes of the host's
+    # datagrams for the game (the log is src/x360_net.c's), and sends the
+    # game's datagrams for peers from its own thread: XNet lets one thread
+    # at a time use a socket (another's call fails with WSAEINPROGRESS) and
+    # its select holds the tunnel's socket, so the game's system link search
+    # sent onto the tunnel from the game's thread never left (as on the
+    # original Xbox: warthog-xbox's port/xbox/p2p/platform.h)
+    "-DP2P_TRACE_DATAGRAMS",
+    "-DP2P_SEND_FROM_THREAD",
     "-Wall",
     "-Wno-unused-function",
     "-Wno-unknown-pragmas",
@@ -461,6 +475,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         *GAME_ABI_FLAGS,
         *GAME_FLAGS,
         *defines,
+        *MAP_LIST_DEFINES,
         file_names,
         f"-include {_quote(prefix_header)}",
         f"-include {_quote(semantics_header)}",
@@ -480,6 +495,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         *GAME_ABI_FLAGS,
         *PLATFORM_FLAGS,
         *defines,
+        *MAP_LIST_DEFINES,
         file_names,
         version_define,
         f"-include {_quote(prefix_header)}",
@@ -547,6 +563,9 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     # the consoles' shared game code: the maps' byte order
     for source in sorted((game / CONSOLE_DIR / "game").glob("*.c")):
         add_object(source, game_cflags, [*implicit_common, semantics_header])
+    # the port's own game code: ONLINE GAMES (game/x360_browser_screen.c)
+    for source in sorted((PORT_DIR / "game").glob("*.c")):
+        add_object(source, game_cflags, [*implicit_common, semantics_header, PORT_DIR / "include" / "x360_game_list.h"])
     game_objects = objects[game_objects_start:]
 
     platform_objects_start = len(objects)

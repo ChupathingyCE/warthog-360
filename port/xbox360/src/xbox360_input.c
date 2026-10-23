@@ -105,27 +105,6 @@ int halo_keyboard_action_shown(int action, char *shown, unsigned long size)
 	return 0;
 }
 
-/* whether a game's map is one of the campaign's levels (as the desktop's
-game list has it, browser.c, which a build without the game browser has
-not): the menus' lists leave those out */
-int browser_map_is_campaign(const char *map)
-{
-	static const char *const levels[] = { "a10", "a30", "a50", "b30", "b40", "c10", "c20", "c40", "d20", "d40" };
-	const char *name = map ? map : "";
-	size_t index;
-
-	if (strchr(name, '@'))
-		return 0;
-	while (strpbrk(name, "\\/"))
-		name = strpbrk(name, "\\/") + 1;
-	for (index = 0; index < sizeof(levels) / sizeof(levels[0]); index++)
-	{
-		if (!_stricmp(name, levels[index]))
-			return 1;
-	}
-	return 0;
-}
-
 void test_input_hold_action(int hold)
 {
 	(void)hold;

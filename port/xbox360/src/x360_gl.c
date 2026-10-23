@@ -3202,7 +3202,12 @@ static void APIENTRY x360_glClear(GLbitfield mask)
 	if (!gl_ready())
 		return;
 	bind_targets();
-	if ((mask & GL_COLOR_BUFFER_BIT) && (gl.bound_color || gl.bound_screen))
+	/* D3D's clear has no color mask. A clear of the screen's alpha alone is
+	none: d3d8_gl.c's frame end makes the window opaque that way after the
+	picture is drawn there, and cleared as a whole color it wiped the
+	picture to black. (The screen's alpha is never shown.) */
+	if ((mask & GL_COLOR_BUFFER_BIT) && (gl.bound_color || gl.bound_screen) &&
+		(gl.color_mask[0] || gl.color_mask[1] || gl.color_mask[2] || (gl.color_mask[3] && gl.draw_framebuffer)))
 		flags |= D3DCLEAR_TARGET;
 	if ((mask & GL_DEPTH_BUFFER_BIT) && gl.bound_depth)
 		flags |= D3DCLEAR_ZBUFFER;

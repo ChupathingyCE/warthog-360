@@ -190,6 +190,23 @@ const char *SDL_GetAudioDeviceName(unsigned int device)
 	return NULL;
 }
 
+/* (the stream's device, for the mixer's log line: the default) */
+unsigned int SDL_GetAudioStreamDevice(void *stream)
+{
+	(void)stream;
+	return 0;
+}
+
+/* the output's format, which audio.channels "auto" asks for: not known, so
+the mixer stays stereo, the voice's two channels */
+_Bool SDL_GetAudioDeviceFormat(unsigned int device, void *spec, int *sample_frames)
+{
+	(void)device;
+	(void)spec;
+	(void)sample_frames;
+	return 0;
+}
+
 void SDL_DestroyAudioStream(void *stream)
 {
 	(void)stream;
