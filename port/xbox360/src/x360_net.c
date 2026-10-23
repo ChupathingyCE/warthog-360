@@ -227,14 +227,118 @@ int posix_socket(int family, int type, int protocol)
 	return (int)handle;
 }
 
+/* (below: the sockets bound for 127.0.0.1) */
+static int is_loopback_socket(int handle);
+static void loopback_socket_set(int handle, int bound);
+
 int posix_socket_close(int handle)
 {
+	if (is_loopback_socket(handle))
+		loopback_socket_set(handle, 0);
 	return closesocket((SOCKET)handle) == 0 ? 0 : -1;
+}
+
+/* ---------- sockets bound to 127.0.0.1
+
+XNet binds nothing to 127.0.0.1 alone, and what is sent there goes to the
+console's own address (outgoing, above), which a socket bound to 127.0.0.1
+would never see. Internet play binds its stand-ins there (port/linux/src/
+p2p.c: the host's datagrams for the game come from them, its connections go
+to them), so a bind to 127.0.0.1 takes every address instead, and the
+socket still says it is bound to 127.0.0.1 (getsockname): xnet.c and p2p.c
+see the binding they asked for, and p2p.c takes only the game's own
+traffic from them. */
+
+#define MAXIMUM_LOOPBACK_SOCKETS 64
+
+static volatile LONG loopback_sockets[MAXIMUM_LOOPBACK_SOCKETS];
+
+static int is_loopback_socket(int handle)
+{
+	int index;
+
+	for (index = 0; index < MAXIMUM_LOOPBACK_SOCKETS; index++)
+	{
+		if (handle && loopback_sockets[index] == (LONG)handle)
+			return 1;
+	}
+	return 0;
+}
+
+static void loopback_socket_set(int handle, int bound)
+{
+	int index;
+
+	for (index = 0; index < MAXIMUM_LOOPBACK_SOCKETS; index++)
+	{
+		if (bound ? InterlockedCompareExchange(&loopback_sockets[index], (LONG)handle, 0) == 0 :
+			InterlockedCompareExchange(&loopback_sockets[index], 0, (LONG)handle) == (LONG)handle)
+		{
+			return;
+		}
+	}
+	if (bound)
+	{
+		static int told;
+
+		if (!told)
+			x360_log("network: more than %d sockets bound to 127.0.0.1; the rest say every address",
+				MAXIMUM_LOOPBACK_SOCKETS);
+		told = 1;
+	}
+}
+
+/* a failed socket call (not one that would block): the first few logged,
+then one in ten seconds, with how many since */
+static void socket_failed(const char *call, int error)
+{
+	static LONG logged, since;
+	static DWORD logged_time;
+	DWORD now = GetTickCount();
+
+	if (error == WSAEWOULDBLOCK)
+		return;
+	InterlockedIncrement(&since);
+	if (logged < 8 || now - logged_time >= 10000)
+	{
+		x360_log("network: %s failed (WSA error %d%s; %ld failure(s) since the last told)", call, error,
+			error == WSAEINPROGRESS ? ", another thread was using the socket" : "", (long)since);
+		logged++;
+		logged_time = now;
+		since = 0;
+	}
+	WSASetLastError(error);
 }
 
 int posix_socket_bind(int handle, const void *address, int address_length)
 {
-	return bind((SOCKET)handle, address, address_length) == 0 ? 0 : -1;
+	const struct sockaddr_in *in = address;
+
+	if (in && address_length >= (int)sizeof(*in) && in->sin_family == AF_INET &&
+		in->sin_addr.s_addr == htonl(LOOPBACK_ADDRESS))
+	{
+		static int told;
+		struct sockaddr_in any;
+
+		memcpy(&any, in, sizeof(any));
+		any.sin_addr.s_addr = htonl(INADDR_ANY);
+		if (bind((SOCKET)handle, (const struct sockaddr *)&any, sizeof(any)) != 0)
+		{
+			socket_failed("a bind meant for 127.0.0.1", WSAGetLastError());
+			return -1;
+		}
+		if (!told)
+			x360_log("network: XNet binds nothing to 127.0.0.1 alone; internet play's stand-ins take every address");
+		told = 1;
+		loopback_socket_set(handle, 1);
+		return 0;
+	}
+	if (bind((SOCKET)handle, address, address_length) != 0)
+	{
+		socket_failed("bind", WSAGetLastError());
+		return -1;
+	}
+	return 0;
 }
 
 int posix_socket_connect(int handle, const void *address, int address_length)
@@ -275,8 +379,14 @@ int posix_socket_sendto(int handle, const void *buffer, int length, int flags, c
 
 	address = outgoing(address, address_length, &storage);
 	result = sendto((SOCKET)handle, buffer, length, flags, address, address_length);
-
-	return result == SOCKET_ERROR ? -1 : result;
+	if (result == SOCKET_ERROR)
+	{
+		/* (XNet refuses a socket another thread is using, its select
+		included: what p2p.c's P2P_SEND_FROM_THREAD keeps from happening) */
+		socket_failed("sendto", WSAGetLastError());
+		return -1;
+	}
+	return result;
 }
 
 int posix_socket_recv(int handle, void *buffer, int length, int flags)
@@ -337,7 +447,15 @@ int posix_socket_getsockopt(int handle, int level, int name, void *value, int *l
 
 int posix_socket_getsockname(int handle, void *address, int *address_length)
 {
-	return getsockname((SOCKET)handle, address, address_length) == 0 ? 0 : -1;
+	if (getsockname((SOCKET)handle, address, address_length) != 0)
+		return -1;
+	/* (one bound for 127.0.0.1 is bound there, as far as the game knows) */
+	if (address && address_length && *address_length >= (int)sizeof(struct sockaddr_in) &&
+		((struct sockaddr_in *)address)->sin_family == AF_INET && is_loopback_socket(handle))
+	{
+		((struct sockaddr_in *)address)->sin_addr.s_addr = htonl(LOOPBACK_ADDRESS);
+	}
+	return 0;
 }
 
 int posix_socket_getpeername(int handle, void *address, int *address_length)
@@ -417,6 +535,70 @@ int posix_socket_select(int *read, int *read_count, int *write, int *write_count
 	if (error)
 		keep_ready(&error_set, error, error_count);
 	return result;
+}
+
+/* ---------- internet play's tunnel, to the game (p2p.c, P2P_TRACE_DATAGRAMS)
+
+What became of the datagrams the host sends the game through the tunnel:
+the handover from the tunnel to the game's own sockets, as the original
+Xbox and the Wii U log it. Each outcome its first four times, then every 10
+seconds; the packets the tunnel opened, by type, every 10 seconds for the
+first two minutes, then every minute. Ports only, never an address. */
+
+void p2p_trace_datagram(unsigned short source_port, unsigned short port, int size, int result)
+{
+	static const char *const outcomes[] =
+	{
+		"no stand-in for it (one could not be made)",
+		"not a port of the game's",
+		"not sent to the game",
+		"sent to the game",
+	};
+	static struct
+	{
+		long count;
+		long logged;
+		DWORD time;
+	} traced[4];
+	int outcome = result + 2;
+	DWORD now = GetTickCount();
+
+	if (outcome < 0 || outcome > 3)
+		return;
+	traced[outcome].count++;
+	if (traced[outcome].logged < 4 || now - traced[outcome].time >= 10000)
+	{
+		x360_log("tunnel: %ld datagram(s) from the host's port %u for the game's port %u (%d bytes): %s",
+			traced[outcome].count, (unsigned)ntohs(source_port), (unsigned)ntohs(port), size, outcomes[outcome]);
+		traced[outcome].count = 0;
+		traced[outcome].logged++;
+		traced[outcome].time = now;
+	}
+}
+
+void p2p_trace_packet(int type, int size)
+{
+	static long counts[8];
+	static long bytes, total;
+	static DWORD time, first;
+	DWORD now = GetTickCount();
+
+	if (!total++)
+	{
+		first = time = now;
+		x360_log("tunnel: the first packet from a peer opened (type %d, %d bytes)", type, size);
+	}
+	counts[type >= 0 && type < 8 ? type : 7]++;
+	bytes += size;
+	if (now - time >= (now - first < 120000 ? 10000UL : 60000UL))
+	{
+		x360_log("tunnel: in the last %lu s, from peers: types 0-7 %ld %ld %ld %ld %ld %ld %ld %ld (%ld bytes)",
+			(unsigned long)((now - time) / 1000), counts[0], counts[1], counts[2], counts[3], counts[4],
+			counts[5], counts[6], counts[7], bytes);
+		memset(counts, 0, sizeof(counts));
+		bytes = 0;
+		time = now;
+	}
 }
 
 posix_ulong posix_local_ipv4_address(void)

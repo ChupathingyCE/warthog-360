@@ -160,6 +160,8 @@ static struct
 	boolean connecting;
 	char connecting_invite[GAME_LIST_INVITE_LENGTH + 1];
 	unsigned long connecting_time;
+	/* (when the wait was last told) */
+	unsigned long connecting_logged_time;
 } browser_screen;
 
 /* ---------- private code */
@@ -280,6 +282,7 @@ static void join_invite(
 	csstrncpy(browser_screen.connecting_invite, invite, GAME_LIST_INVITE_LENGTH);
 	browser_screen.connecting_invite[GAME_LIST_INVITE_LENGTH] = 0;
 	browser_screen.connecting_time = system_milliseconds();
+	browser_screen.connecting_logged_time = browser_screen.connecting_time;
 	set_status("Connecting...");
 	error(_error_log, "online games: joining %s (invite %.8s...)", name, invite);
 }
@@ -290,7 +293,16 @@ static void wait_for_host(
 	void)
 {
 	long joined = network_game_client_join_invite_host(browser_screen.connecting_invite);
+	unsigned long now = system_milliseconds();
 
+	/* (the wait told every 5 seconds: the next hop is the host's game
+	advertised through the tunnel, the "tunnel:" lines of src/x360_net.c) */
+	if (!joined && now - browser_screen.connecting_logged_time >= 5000)
+	{
+		browser_screen.connecting_logged_time = now;
+		error(_error_log, "online games: %lu s on, the host's game is not advertised through the tunnel yet",
+			(now - browser_screen.connecting_time) / 1000);
+	}
 	if (joined > 0)
 	{
 		error(_error_log, "online games: the host's game was advertised through the tunnel; joining it");

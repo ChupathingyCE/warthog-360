@@ -149,6 +149,15 @@ MAP_LIST_DEFINES = ["-DHALO_MAP_LIST"]
 PLATFORM_FLAGS = [
     "-std=gnu11",
     "-DHALO_LINUX_PLATFORM_LAYER",
+    # internet play's tunnel (p2p.c) logs what becomes of the host's
+    # datagrams for the game (the log is src/x360_net.c's), and sends the
+    # game's datagrams for peers from its own thread: XNet lets one thread
+    # at a time use a socket (another's call fails with WSAEINPROGRESS) and
+    # its select holds the tunnel's socket, so the game's system link search
+    # sent onto the tunnel from the game's thread never left (as on the
+    # original Xbox: warthog-xbox's port/xbox/p2p/platform.h)
+    "-DP2P_TRACE_DATAGRAMS",
+    "-DP2P_SEND_FROM_THREAD",
     "-Wall",
     "-Wno-unused-function",
     "-Wno-unknown-pragmas",
