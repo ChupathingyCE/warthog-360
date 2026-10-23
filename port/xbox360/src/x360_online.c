@@ -28,6 +28,10 @@ through what the game's own networking uses.
 #include "x360_port.h"
 #include "x360_game_list.h"
 
+/* (the game's network_distributed.c) the messages turned to the PC's byte order and
+back, against the PC's bytes; the count that differ */
+long network_wire_self_test(char *report, long report_size);
+
 #define FETCH_TIMEOUT 15000
 #define ATTEMPTS 3
 #define RETRY_WAIT 10000
@@ -303,8 +307,12 @@ static void self_test(void)
 {
 	DWORD milliseconds = 0;
 	const char *failure;
+	char report[256];
+	long failed;
 
 	x360_log("net test: start");
+	failed = network_wire_self_test(report, (long)sizeof(report));
+	x360_log("net test: byte order %s: %s", failed ? "FAILED" : "ok", report);
 	if (!x360_network_start())
 	{
 		x360_log("net test: the network did not start; no DNS, UDP or HTTP test");

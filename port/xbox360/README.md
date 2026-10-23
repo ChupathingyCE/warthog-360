@@ -75,7 +75,7 @@ Untested on hardware. The network comes up as the owner's Butter and Jelly (a Je
 
 At start-up a self-test runs on a thread of its own (`src/x360_online.c`) and logs `net test:` lines to `port.txt` and the debug channel: XNet and the link, a UDP datagram to the console's own port read back, `warthog.milenko.org` looked up, and `GET /v1/console/games?packs=1` over plain HTTP. That list is the Multiplayer menu's ONLINE GAMES (`game/x360_browser_screen.c`, `HALO_CONSOLE_ONLINE_GAMES`): the original Xbox's screen and list parser (ChupathingyCE/warthog-xbox), joining a game through its invite and internet play's tunnel, as on the Xbox. X refreshes, B goes back.
 
-Byte order: the network is big-endian, which the 360 already is. The game's transport addresses and ports, message headers and encoded messages, and the platform layer's `htonl`/`htons`, `inet_addr` and internet play's helpers swap only on little-endian machines (the game's `NETWORK_SWAP2`/`NETWORK_SWAP4`, `HALO_BIG_ENDIAN`). Still to do before a whole game with the PCs: the port's distributed netcode (the game's `port/linux/game/network_*.c`) sends its messages as the machine's own structures, so a 360 reads a PC host's game-time, positions and counts in the wrong byte order. Those messages need a wire layer of their own.
+Byte order: the game's own network code converts every message, game advertisement and settings record to the wire's little-endian on a big-endian build (`HALO_BIG_ENDIAN`; the game's `port/linux/game/network_distributed.c`). The start-up self-test writes `net test: byte order ok` to `port.txt` when the conversion matches the PC's bytes (`network_wire_self_test`).
 
 Logs never show an address, only its kind (private, public).
 
