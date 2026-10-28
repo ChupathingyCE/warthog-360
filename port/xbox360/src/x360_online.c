@@ -9,7 +9,7 @@ waits on them:
 2. DNS: warthog.milenko.org looked up.
 3. UDP: a datagram to this console's own port (127.0.0.1, which x360_net.c
    sends to the console's address), read back.
-4. HTTP: GET /v1/console/games?packs=1 from warthog.milenko.org, plain
+4. HTTP: GET /v1/console/games?coop=1&packs=1 from warthog.milenko.org, plain
    HTTP/1.0 as the original Xbox asks for it, parsed; the list is the
    Multiplayer menu's ONLINE GAMES (game/x360_browser_screen.c).
 

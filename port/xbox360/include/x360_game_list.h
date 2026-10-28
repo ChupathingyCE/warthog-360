@@ -24,14 +24,17 @@ gets those of up to 16 */
 #if defined(HALO_CONSOLE_PLAYERS) && HALO_CONSOLE_PLAYERS > 16
 #define GAME_LIST_STRING_OF(x) #x
 #define GAME_LIST_STRING(x) GAME_LIST_STRING_OF(x)
-#define GAME_LIST_PATH "/v1/console/games?packs=1&players=" GAME_LIST_STRING(HALO_CONSOLE_PLAYERS)
+#define GAME_LIST_PATH "/v1/console/games?coop=1&packs=1&players=" GAME_LIST_STRING(HALO_CONSOLE_PLAYERS)
 #else
-#define GAME_LIST_PATH "/v1/console/games?packs=1"
+#define GAME_LIST_PATH "/v1/console/games?coop=1&packs=1"
 #endif
 /* (packs=1: this build plays Xbox map packs' maps, <file>@<pack> in
 maps_<pack>, so the list sends their games too, each with its map's name
 and its pack's tag in the line's 14th and 15th fields; a build before map
 packs asks without it and gets none of them) */
+/* (coop=1: this build plays network co-op, so the list sends the co-op games
+on the Xbox's campaign levels too, after the multiplayer games; a build
+before it asks without it and gets none of them) */
 #define GAME_LIST_PORT 80
 /* the whole response, headers and all, at most: the console's list is
 filtered to the games it can join (about 130 bytes a line, 41 lines in
@@ -147,11 +150,13 @@ const char *game_list_type_name(const struct game_list_game *game);
 /* a game's state ("open", ...) in words */
 const char *game_list_state_name(const char *state);
 /* whether a game is network co-op (its gametype "Co-op", or no engine on a
-campaign level), which the console does not play */
+campaign level) */
 int game_list_is_coop(const struct game_list_game *game);
-/* the games in the screen's order (most players first, then by name), co-op
-games left out, as indices into list->games in order; their count */
-int game_list_order(const struct game_list *list, unsigned char *order);
+/* the games in the screen's order (most players first, then by name), as
+indices into list->games in order; their count. filter is the game lists'
+(port/linux/src/browser.h's BROWSER_LIST_FILTER_*): 0 every game, 1 the
+multiplayer games, 2 the co-op games */
+int game_list_order(const struct game_list *list, unsigned char *order, int filter);
 
 /* ---------- the console (src/x360_online.c) */
 
