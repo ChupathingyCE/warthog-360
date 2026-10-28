@@ -24,6 +24,11 @@ The log names the host and what went wrong, never an address.
 /* the game's (port/linux/src/delta.c, HALO_CONSOLE_HTTPS) */
 int delta_legacy_refresh(void);
 
+/* (port/linux/src/port_config.h) */
+void config_folder(char *path, size_t size);
+/* the newest pin document's file (console_https.h's pins_path) */
+static char pins_path[300];
+
 /* the signed table again this often, and this long after a failure, as the
 desktop builds (delta.c's DELTA_REFRESH_INTERVAL and DELTA_RETRY_INTERVAL) */
 #define TABLE_REFRESH (4ul * 60 * 60 * 1000)
@@ -149,10 +154,13 @@ static void https_log(const char *text)
 	x360_log("%s", text);
 }
 
-static const struct console_https_port x360_https_port =
+static struct console_https_port x360_https_port =
 {
 	https_connect, https_send, https_receive, https_close, https_random, https_milliseconds,
 	https_lock_enter, https_lock_leave, https_log, "Warthog360/1",
+	/* (the pin document: plain HTTP from the list's host, x360_online.c;
+	where it is kept is set at the start) */
+	x360_online_plain_get, NULL,
 };
 
 void x360_https_start(void)
@@ -162,6 +170,10 @@ void x360_https_start(void)
 	if (InterlockedCompareExchange(&started, 1, 0) != 0)
 		return;
 	InitializeCriticalSection(&https_lock);
+	/* (the newest pin document, beside config.toml) */
+	config_folder(pins_path, sizeof(pins_path) - 32);
+	strcat(pins_path, "console_pins.signed");
+	x360_https_port.pins_path = pins_path;
 	console_https_initialize(&x360_https_port);
 }
 

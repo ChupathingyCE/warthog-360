@@ -102,6 +102,11 @@ sized for them. */
 
 /* the client set up (once the network is up; any thread, once) */
 void x360_https_start(void);
+/* one plain HTTP GET of host's path on port 80, the whole response into
+response (x360_online.c, as the plain list asks): 1 if one came. The HTTPS
+client's plain_get, for the signed pin document */
+int x360_online_plain_get(const char *host, const char *path, char *response, unsigned long size,
+	unsigned long *received, unsigned long timeout_ms);
 /* the signed legacy table fetched again, when it is due (at the first call,
 then every 4 hours, or 30 minutes after a failure); blocking, on a thread
 with CONSOLE_HTTPS_STACK_SIZE + DELTA_REFRESH_STACK_SIZE to spare */

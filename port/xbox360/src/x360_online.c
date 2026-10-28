@@ -222,6 +222,16 @@ static int http_get(unsigned long address, unsigned short port, const char *host
 	return result;
 }
 
+int x360_online_plain_get(const char *host, const char *path, char *response, unsigned long size,
+	unsigned long *received, unsigned long timeout_ms)
+{
+	unsigned long address = (unsigned long)posix_resolve_ipv4(host);
+
+	*received = 0;
+	return address && http_get(address, 80, host, path, response, size, received, timeout_ms) == GAME_LIST_OK &&
+		*received > 0;
+}
+
 /* ---------- the self-test's UDP step */
 
 /* a datagram to this console's own port, read back: 1 if it came back
