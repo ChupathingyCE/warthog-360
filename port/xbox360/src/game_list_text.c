@@ -206,7 +206,7 @@ int game_list_is_coop(const struct game_list_game *game)
 	return 0;
 }
 
-int game_list_order(const struct game_list *list, unsigned char *order)
+int game_list_order(const struct game_list *list, unsigned char *order, int filter)
 {
 	int count = list->count, index, place, shown = 0;
 
@@ -214,11 +214,11 @@ int game_list_order(const struct game_list *list, unsigned char *order)
 		count = 0;
 	if (count > GAME_LIST_MAXIMUM_GAMES)
 		count = GAME_LIST_MAXIMUM_GAMES;
-	/* (an insertion sort: 64 games at most; co-op games left out, which the
-	console does not play: port/xbox/game/xbox_coop.c) */
+	/* (an insertion sort: 64 games at most; the games the filter leaves out
+	skipped) */
 	for (index = 0; index < count; index++)
 	{
-		if (game_list_is_coop(&list->games[index]))
+		if (filter && game_list_is_coop(&list->games[index]) != (filter == 2))
 			continue;
 		for (place = shown; place > 0 && before(list, index, order[place - 1]); place--)
 			order[place] = order[place - 1];

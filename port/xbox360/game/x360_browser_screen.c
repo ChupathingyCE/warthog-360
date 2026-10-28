@@ -58,6 +58,10 @@ boolean create_global_network_game_client(void);
 void game_connection_set(short connection);
 /* (internet play's, port/linux/src/p2p.c: the tunnel to an invite's host) */
 int p2p_join_invite(char const *text);
+/* (the game lists' filter, kept for the session: port/linux/src/browser.c,
+the Join Game screen's too) */
+int browser_list_filter(void);
+void browser_list_filter_cycle(void);
 /* (the platform layer's settings, port/linux/src/port_config.h: whether
 internet play is on) */
 int config_boolean(char const *name);
@@ -148,6 +152,8 @@ static struct
 	/* the list taken (x360_game_list_get's count of lists), in the screen's order */
 	int lists;
 	int count;
+	/* the filter it was put in order for (browser_list_filter) */
+	int filter;
 	unsigned char order[GAME_LIST_MAXIMUM_GAMES];
 	short selected;
 	/* the rows a page (as the menu's font fits them: browser_screen_render) */
@@ -193,10 +199,11 @@ static void take_list(
 	struct game_list const *list = x360_game_list_get(&lists);
 	short index;
 
-	if (!list || lists == browser_screen.lists)
+	if (!list || (lists == browser_screen.lists && browser_list_filter() == browser_screen.filter))
 		return;
 	browser_screen.lists = lists;
-	browser_screen.count = game_list_order(list, browser_screen.order);
+	browser_screen.filter = browser_list_filter();
+	browser_screen.count = game_list_order(list, browser_screen.order, browser_screen.filter);
 	for (index = 0; index < browser_screen.count; index++)
 	{
 		if (!strcmp(list->games[browser_screen.order[index]].invite, browser_screen.selected_invite))
@@ -437,6 +444,14 @@ void browser_screen_process(
 					else
 						join_invite(game->invite, game->name);
 				}
+				break;
+			case _gamepad_analog_button_y:
+				/* (the filter: all games, multiplayer or co-op, as Join Game's) */
+				ui_play_audio_feedback_sound(_browser_sound_forward);
+				browser_list_filter_cycle();
+				browser_screen.selected = 0;
+				browser_screen.selected_invite[0] = 0;
+				take_list();
 				break;
 			case _gamepad_analog_button_x:
 				ui_play_audio_feedback_sound(_browser_sound_forward);
@@ -689,7 +704,7 @@ void browser_screen_render(
 	text(heading_font != NONE ? heading_font : font, _justify_left, &title_color, SCREEN_LEFT, TITLE_TOP,
 		SCREEN_RIGHT, RULE_Y - 2, "ONLINE GAMES");
 	for (index = 0; index < browser_screen.count && list; index++)
-		players += list->games[index].players;
+		players += list->games[browser_screen.order[index]].players;
 	snprintf(line, sizeof(line), "%d GAMES   %ld PLAYERS", browser_screen.count, players);
 	text(font, _justify_right, &dim_color, SCREEN_LEFT, RULE_Y - 2 - line_height(font), SCREEN_RIGHT,
 		RULE_Y - 2, line);
@@ -716,6 +731,8 @@ void browser_screen_render(
 		char const *words =
 			state == X360_GAME_LIST_FAILED ? "Could not reach the game list. Check your network settings." :
 			state == X360_GAME_LIST_FETCHING || !list ? "Getting the game list..." :
+			browser_list_filter() == 2 ? "No co-op games right now." :
+			browser_list_filter() == 1 ? "No multiplayer games right now." :
 			"No one is hosting right now.";
 
 		text(font, _justify_center, &dim_color, SCREEN_LEFT, LIST_TOP + row_height * 2, SCREEN_RIGHT,
@@ -773,6 +790,13 @@ void browser_screen_render(
 	words) */
 	if (font != NONE)
 	{
+		/* (Y names the filter it is on) */
+		static wchar_t const *const buttons[] =
+		{
+			L"%a-button Join     %x-button Refresh     %y-button Filter: All     %b-button Back",
+			L"%a-button Join     %x-button Refresh     %y-button Filter: Multiplayer     %b-button Back",
+			L"%a-button Join     %x-button Refresh     %y-button Filter: Co-op     %b-button Back",
+		};
 		rectangle2d bounds;
 
 		bounds.x0 = SCREEN_LEFT + CELL_INSET;
@@ -782,7 +806,7 @@ void browser_screen_render(
 		draw_string_set_draw_mode(font, NONE, _justify_left, 0, &text_color);
 		draw_string_and_hack_in_icons(&bounds, &bounds, NULL, 0,
 			browser_screen.connecting ? L"%b-button Stop" :
-				L"%a-button Join     %x-button Refresh     %b-button Back", FALSE);
+				buttons[browser_list_filter() == 2 ? 2 : browser_list_filter() == 1 ? 1 : 0], FALSE);
 	}
 }
 
