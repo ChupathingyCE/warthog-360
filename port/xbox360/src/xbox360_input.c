@@ -90,6 +90,19 @@ unsigned long halo_keyboard_actions(short controller_index)
 	return 0;
 }
 
+/* text chat (the game's port/linux/game/chat.c, Delta Peer's client part):
+no keyboard types a line, so the console hears the lines and says the
+controller's quick lines (D-pad up and down), and no escape closes it */
+void platform_chat_typing(int typing)
+{
+	(void)typing;
+}
+
+int platform_chat_escape(void)
+{
+	return 0;
+}
+
 /* the game's button prompts are the controller's (no keyboard prompts on
 the console, as the dedicated server's: server_input.c) */
 int halo_keyboard_prompts(void)

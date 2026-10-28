@@ -146,6 +146,12 @@ GAME_FLAGS = [
 # port/linux/game/ui_map_list.c, map_packs.c); the console list's packs=1
 MAP_LIST_DEFINES = ["-DHALO_MAP_LIST"]
 
+# Delta Peer as a client, as the original Xbox has it (the game's
+# port/linux/src/delta_peer_game.c): the console joins a Delta host by its
+# wire and range, whatever OpenCE number it announces, and takes the host's
+# game layout from the number it announced (network_client_manager.c)
+DELTA_DEFINES = ["-DHALO_CONSOLE_DELTA"]
+
 PLATFORM_FLAGS = [
     "-std=gnu11",
     "-DHALO_LINUX_PLATFORM_LAYER",
@@ -476,6 +482,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         *GAME_FLAGS,
         *defines,
         *MAP_LIST_DEFINES,
+        *DELTA_DEFINES,
         file_names,
         f"-include {_quote(prefix_header)}",
         f"-include {_quote(semantics_header)}",
@@ -496,6 +503,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         *PLATFORM_FLAGS,
         *defines,
         *MAP_LIST_DEFINES,
+        *DELTA_DEFINES,
         file_names,
         version_define,
         f"-include {_quote(prefix_header)}",
