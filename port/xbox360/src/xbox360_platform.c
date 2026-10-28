@@ -9,12 +9,14 @@ server does (server/platform/server_platform.c), drawing nothing
 
 Also the build's first log line (its version, commit and build time: a
 failed upload leaves the old XEX), the texture write watch the console does
-without (memory_watch.c), and the self-updater's version.
+without (memory_watch.c), the self-updater's version, and the signed
+legacy table's start (delta_legacy_start, sdl_platform.c's on the desktop).
 */
 
 #include "platform.h"
 #include "sdl_platform.h"
 #include "port_config.h"
+#include "delta.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,6 +152,11 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 	}
 	platform_log("video: the game's %lux%lu screen, drawn through OpenGL on Direct3D 9", width, height);
 	ready = TRUE;
+	/* (the signed legacy table's cache, and the game's network rules told
+	of its layouts: once, on the main thread, as the desktop builds'
+	platform_sdl_initialize does it; the list's thread fetches newer ones,
+	x360_online.c) */
+	delta_legacy_start();
 	return TRUE;
 }
 

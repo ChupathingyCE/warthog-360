@@ -37,7 +37,7 @@ import shlex
 from pathlib import Path
 from typing import Any, List, Optional
 
-from tools.console_build import ConsolePort, console_defines, relative
+from tools.console_build import ConsolePort, console_defines, console_https_flags, console_https_sources, relative
 from tools.embed_assets import hud_asset_inputs
 from tools.linux_build import (EXPAT_DIR, KCP_DIR, MONOCYPHER_DIR, MUSL_MATH_DIR, QRCODEGEN_DIR, TOML_DIR,
                                XDK_INCLUDE, ZLIB_DEFINES, ZLIB_DIR, ZLIB_SOURCES)
@@ -218,6 +218,16 @@ REPLACED_PLATFORM_SOURCES = {
     "updater.c",
     "update_signature.c",
 }
+
+# the platform layer's units that use the console's HTTPS (the game's
+# port/console/https, HALO_CONSOLE_HTTPS): the signed legacy table, fetched
+# on the game list's thread (src/x360_https.c asks), and Delta Peer's kill
+# switch, which reads it
+HTTPS_PLATFORM_SOURCES = {"delta.c", "delta_peer_game.c"}
+# the console's units that call the client: the client itself
+# (x360_https.c) and the game list (x360_online.c, which sizes its thread
+# by delta.h's DELTA_REFRESH_STACK_SIZE)
+HTTPS_CONSOLE_SOURCES = {"x360_https.c", "x360_online.c"}
 
 # what the XEX links: XAM and the kernel come in as imports through xapilib
 # and xboxkrnl
@@ -569,19 +579,25 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     game_objects = objects[game_objects_start:]
 
     platform_objects_start = len(objects)
+    # (HTTPS: the client's header on the line, HALO_CONSOLE_HTTPS defined)
+    https_platform_cflags = " ".join([platform_cflags, "-DHALO_CONSOLE_HTTPS", *console_https_flags(game)])
     for source in sorted((game / LINUX_DIR / "src").glob("*.c")):
         if source.name in REPLACED_PLATFORM_SOURCES:
             continue
-        add_object(source, platform_cflags, [*implicit_common, platform_semantics_header])
+        add_object(source, https_platform_cflags if source.name in HTTPS_PLATFORM_SOURCES else platform_cflags,
+                   [*implicit_common, platform_semantics_header])
     # the C runtime's file functions with Xbox paths, as on Windows
     add_object(game / WINDOWS_DIR / "src" / "windows_crt.c", platform_cflags,
                [*implicit_common, platform_semantics_header])
     # the console's own units (x360_*.c, over its SDK), and the platform
     # layer's units the port stands in for (the dedicated server's few SDL
     # functions: files, and the audio stream x360_audio.c plays)
+    https_console_cflags = " ".join([console_cflags, f"-iquote {_quote(game / CONSOLE_DIR / 'https')}",
+                                     f"-iquote {_quote(game / LINUX_DIR / 'include')}"])
     for source in sorted((PORT_DIR / "src").glob("*.c")):
         if source.name.startswith("x360_"):
-            add_object(source, console_cflags, [stamp])
+            add_object(source, https_console_cflags if source.name in HTTPS_CONSOLE_SOURCES else console_cflags,
+                       [stamp])
         else:
             add_object(source, platform_cflags, [*implicit_common, platform_semantics_header])
     embedded = gen_dir / "hud_hires_assets.c"
@@ -609,6 +625,14 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     for source in sorted((musl / "src").glob("*.c")):
         add_object(source, f"{third_party_cflags} -I{_quote(musl / 'include')} "
                            f"-include {_quote(musl / 'include' / 'libm.h')}", [])
+
+    # HTTPS (src/x360_https.c): the game's shared client and Mbed TLS with
+    # the consoles' configuration (the game's docs/console-https.md), over
+    # the console's C runtime, built for size
+    https_cflags = " ".join([*BASE_FLAGS, *FREESTANDING_FLAGS, "-Os", "-std=gnu11", "-w",
+                             *console_https_flags(game, windows_crt=True), f"-I{crt_wrappers}", *crt_includes])
+    for source in console_https_sources():
+        add_object(game / source, https_cflags, [])
 
     builtins_obj = obj_dir / "oxdk360_builtins.o"
     objects.append(builtins_obj)
