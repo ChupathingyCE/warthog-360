@@ -65,7 +65,7 @@ sh chupathingyce/port/console/tests/run_tag_byte_swap_test.sh /path/to/maps/bloo
 
 ## Networking
 
-Works on hardware (RGH). The network comes up as the owner's Butter and Jelly (a Jellyfin client that runs networking and verified HTTPS on an RGH 360) brings it up, in `src/x360_net.c`:
+Works on hardware (RGH). The network comes up as Butter and Jelly (a Jellyfin client that runs networking and verified HTTPS on an RGH 360) brings it up, in `src/x360_net.c`:
 
 - XNet starts with `XNET_STARTUP_BYPASS_SECURITY`, restarted on those terms if it was already up, then Winsock, then a wait of up to 8 seconds for the console's address.
 - Every socket gets `setsockopt` `SO_UNENCRYPTED` (0x5801): without it the console encrypts what it sends and drops replies while reporting success. The startup flag alone is not enough.
@@ -81,7 +81,7 @@ Logs never show an address, only its kind (private, public).
 
 ## Notes for the port
 
-From the owner's earlier OXDK360 ports, and what phase 0 is built around:
+From earlier OXDK360 ports, and what phase 0 is built around:
 
 - Paths: backslashes only, and device names longer than a letter (`game:`). A forward slash fails silently on writes, and `path[1] == ':'` checks miss the device.
 - `game:` is writable when launched from Aurora; `Hdd:` and `Hdd1:` may not be mounted.
