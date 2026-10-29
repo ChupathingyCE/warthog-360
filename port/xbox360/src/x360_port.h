@@ -28,6 +28,15 @@ intrinsic of Microsoft's compiler alone) */
 void console_debug_print(const char *text);
 void x360_log(const char *format, ...);
 
+/* ---------- compiled shaders on the drive (x360_shader_cache.c) */
+
+/* the cache's name for a shader: its HLSL text and its profile */
+unsigned long long x360_shader_cache_key(const char *text, int vertex);
+/* the compiled shader kept under `key` (malloc'd, `size` bytes), or NULL */
+void *x360_shader_cache_load(unsigned long long key, int vertex, unsigned long *size);
+/* 1 if the compiled shader was written whole */
+int x360_shader_cache_store(unsigned long long key, int vertex, const void *code, unsigned long size);
+
 /* ---------- the Xbox window (x360_memory.c) */
 void x360_window_flush(void);
 /* a log line of the host's free memory and the Xbox heap's use, 'when' naming the moment */

@@ -79,6 +79,8 @@ Start on ONLINE GAMES opens DELTA PROFILE (the game's `port/console/link`, `src/
 
 Byte order: the game's own network code converts every message, game advertisement and settings record to the wire's little-endian on a big-endian build (`HALO_BIG_ENDIAN`; the game's `port/linux/game/network_distributed.c`). The start-up self-test writes `net test: byte order ok` to `port.txt` when the conversion matches the PC's bytes (`network_wire_self_test`).
 
+Delta: the console is a Delta Peer client (`HALO_CONSOLE_DELTA`, as on the original Xbox). It joins a Delta host by its wire and range, whatever OpenCE number the host announces, and reads the host's game settings in the layout of that number. A game it cannot join says why on the Online Games screen. It hears text chat and says the controller's quick lines (no keyboard). It never hosts on Delta. `sh port/xbox360/tests/run.sh` checks the join decision on the host.
+
 Logs never show an address, only its kind (private, public).
 
 ## Notes for the port

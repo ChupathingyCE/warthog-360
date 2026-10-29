@@ -80,6 +80,9 @@ To report a problem, tell us in #xbox-360 on the Discord and attach the logs.
 The game writes its log to `game:\debug.txt`, and the port's own to
 `game:\port.txt` and the debug channel. Attach them to bug reports.
 Settings are in `game:\config.toml`, written at the first start.
+Compiled shaders are kept in `game:\shaders`, so each one is compiled
+once, not at every start. Deleting the folder is safe: they are compiled
+again.
 
 ## Building it yourself
 
@@ -103,9 +106,14 @@ You need:
 Build:
 
 ```sh
-python3 chupathingyce/configure.py --console-port port/xbox360 [--xdk360 /path/to/XDK]
+python3 chupathingyce/configure.py --console-port port/xbox360 --console-no-debug-asserts [--xdk360 /path/to/XDK]
 ninja xbox360                       # build/xbox360/default.xex
 ```
+
+`--console-no-debug-asserts` is the build testers get, as on the Wii U
+and the original Xbox. It is faster on the console: the debug decomp's
+asserts are compiled out, as the retail game had them, except the memory
+checks. Leave it out for a build that stops at the first failed assert.
 
 Without the toolchain or the SDK, `ninja xbox360` says what is missing.
 `--console-debug-tools` adds the developer tools (the frame profiler, the

@@ -33,3 +33,5 @@ jobs:
           grep -q "ninja xbox360 needs" build.ninja
       - name: The port's tools compile
         run: python3 -m py_compile port/xbox360/build.py tools/xbox360_package.py tools/xbox360_stamp.py
+      - name: The port's host tests (which hosts the console joins)
+        run: sh port/xbox360/tests/run.sh
