@@ -44,6 +44,10 @@ the first time.
 #include "x360_port.h"
 #include "x360_glsl.h"
 
+/* (d3dx9mesh.h's, which OXDK360's C stand-in for d3dx9.h leaves out with the
+mesh functions: the drive's shader cache hands its bytes over in one) */
+HRESULT WINAPI D3DXCreateBuffer(DWORD NumBytes, LPD3DXBUFFER *ppBuffer);
+
 #define FIRST_USE() first_use(__func__)
 
 /* ---------- the log */
@@ -1260,12 +1264,22 @@ static void targets_written(void)
 
 /* ---------- programs */
 
+/* the shaders compiled and read from the drive's cache (x360_shader_cache.c),
+for the log */
+static struct
+{
+	unsigned long compiled, read, written;
+	unsigned long compile_ms, read_ms;
+	unsigned long logged;
+} shader_stats;
+
 static BOOL shader_compile(struct shader *shader)
 {
 	HRESULT result;
 	LPD3DXBUFFER code = NULL, errors = NULL;
 	int vertex = shader->type == GL_VERTEX_SHADER;
 	const char *location;
+	unsigned long long key;
 
 	if (shader->compiled)
 		return shader->vertex || shader->pixel;
@@ -1316,8 +1330,47 @@ static BOOL shader_compile(struct shader *shader)
 			}
 		}
 	}
-	result = D3DXCompileShader(shader->hlsl, (UINT)strlen(shader->hlsl), NULL, NULL, "main",
-		vertex ? "vs_3_0" : "ps_3_0", 0, &code, &errors, &shader->constants);
+	/* (compiled on an earlier run: x360_shader_cache.c) */
+	key = x360_shader_cache_key(shader->hlsl, vertex);
+	{
+		DWORD started = GetTickCount();
+		unsigned long size = 0;
+		void *cached = x360_shader_cache_load(key, vertex, &size);
+
+		if (cached && SUCCEEDED(D3DXCreateBuffer((DWORD)size, &code)) && code)
+		{
+			memcpy(code->lpVtbl->GetBufferPointer(code), cached, size);
+			if (FAILED(D3DXGetShaderConstantTable((const DWORD *)code->lpVtbl->GetBufferPointer(code),
+				&shader->constants)) || !shader->constants)
+			{
+				code->lpVtbl->Release(code);
+				code = NULL;
+				shader->constants = NULL;
+			}
+		}
+		free(cached);
+		if (code)
+		{
+			shader_stats.read++;
+			shader_stats.read_ms += GetTickCount() - started;
+		}
+	}
+	if (code)
+		result = S_OK;
+	else
+	{
+		DWORD started = GetTickCount();
+
+		result = D3DXCompileShader(shader->hlsl, (UINT)strlen(shader->hlsl), NULL, NULL, "main",
+			vertex ? "vs_3_0" : "ps_3_0", 0, &code, &errors, &shader->constants);
+		shader_stats.compiled++;
+		shader_stats.compile_ms += GetTickCount() - started;
+		if (SUCCEEDED(result) && code && x360_shader_cache_store(key, vertex, code->lpVtbl->GetBufferPointer(code),
+			(unsigned long)code->lpVtbl->GetBufferSize(code)))
+		{
+			shader_stats.written++;
+		}
+	}
 	if (FAILED(result) || !code)
 	{
 		static int failures;
@@ -4136,6 +4189,14 @@ static void x360_gl_swap_timed(void)
 	gl.frame++;
 	if (gl.frame == 1 || gl.frame == 120 || gl.frame % 1800 == 0)
 		x360_memory_report("frame");
+	if ((gl.frame == 1 || gl.frame % 300 == 0) &&
+		shader_stats.logged != shader_stats.compiled + shader_stats.read)
+	{
+		shader_stats.logged = shader_stats.compiled + shader_stats.read;
+		x360_log("gl: shaders so far: %lu compiled (%lu ms), %lu read from game:\\shaders (%lu ms), %lu written there",
+			shader_stats.compiled, shader_stats.compile_ms, shader_stats.read, shader_stats.read_ms,
+			shader_stats.written);
+	}
 	frame_first_draw = gl.draws;
 	if (debug.flush_window_every && gl.frame % debug.flush_window_every == 0)
 		x360_window_flush();

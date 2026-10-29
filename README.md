@@ -80,6 +80,9 @@ To report a problem, tell us in #xbox-360 on the Discord and attach the logs.
 The game writes its log to `game:\debug.txt`, and the port's own to
 `game:\port.txt` and the debug channel. Attach them to bug reports.
 Settings are in `game:\config.toml`, written at the first start.
+Compiled shaders are kept in `game:\shaders`, so each one is compiled
+once, not at every start. Deleting the folder is safe: they are compiled
+again.
 
 ## Building it yourself
 
