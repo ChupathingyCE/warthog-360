@@ -1177,6 +1177,20 @@ static BOOL texture_surface(struct texture *texture)
 }
 
 /* the console's bound surfaces, as GL's draw framebuffer has them */
+/* The last draw, for console_gl_draw_again (the game's d3d8_gl.c draws
+the lens flares' visibility tests after the first with the first one's
+state): valid while the device has what that draw gave it, its program,
+state, targets and vertex streams, and the streams read their buffers where
+they are (no copy made for that draw's vertices alone). A target bound, a
+resolve, a clear, a blit or the present ends it. */
+static struct
+{
+	BOOL valid;
+	struct program *program;
+	/* setup_vertices: this draw's streams are the buffers themselves */
+	BOOL in_place;
+} again;
+
 static void bind_targets(void)
 {
 	struct framebuffer *framebuffer = object_get(gl.draw_framebuffer, _object_framebuffer);
@@ -1191,6 +1205,7 @@ static void bind_targets(void)
 		{
 			D3DSurface *back_buffer = NULL;
 
+			again.valid = FALSE;
 			IDirect3DDevice9_GetBackBuffer(gl.device, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back_buffer);
 			IDirect3DDevice9_SetRenderTarget(gl.device, 0, back_buffer);
 			IDirect3DDevice9_SetDepthStencilSurface(gl.device, NULL);
@@ -1209,6 +1224,7 @@ static void bind_targets(void)
 	{
 		/* (a target with no color keeps the last one bound: the console
 		cannot take none) */
+		again.valid = FALSE;
 		if (color_surface)
 			IDirect3DDevice9_SetRenderTarget(gl.device, 0, color_surface);
 		IDirect3DDevice9_SetDepthStencilSurface(gl.device, depth_surface);
@@ -1227,6 +1243,7 @@ static void texture_resolve(struct texture *texture)
 	if (!texture->unresolved || !texture->surface || !texture->d3d || texture->depth_format || debug.no_resolves)
 		return;
 	texture->unresolved = FALSE;
+	again.valid = FALSE;
 	if (gl.bound_screen || gl.bound_color != texture->surface)
 	{
 		IDirect3DDevice9_SetRenderTarget(gl.device, 0, texture->surface);
@@ -1477,6 +1494,8 @@ static void uniform_set(GLint location, const float *values, int vectors, int co
 	struct uniform *uniform;
 	int index, element;
 
+	/* (the device's constants are the last draw's no more) */
+	again.valid = FALSE;
 	if (!program || location < 0)
 		return;
 	index = LOCATION_UNIFORM(location);
@@ -2127,6 +2146,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 	for (index = 0; index < BINDINGS; index++)
 		stream_of_binding[index] = -1;
 	memset(strides, 0, sizeof(strides));
+	again.in_place = !deindex_indices && !draw_base_vertex;
 	for (index = 0; index < ATTRIBUTES; index++)
 	{
 		struct attribute *attribute = &gl.attributes[index];
@@ -2156,6 +2176,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 
 			if (!buffer || !buffer->data || !vertex_end || element_bytes > 16)
 				return FALSE;
+			again.in_place = FALSE;
 			copy = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset, slot * vertex_end);
 			if (!copy)
 				return FALSE;
@@ -2231,6 +2252,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 				else if (((UINT_PTR)copy & 3) || debug.copy_vertices)
 				{
 					/* (a stream starts on 4 bytes: an odd one is copied) */
+					again.in_place = FALSE;
 					bytes = stride ? stride * vertex_end : 64;
 					if ((unsigned long)binding->offset + bytes > buffer->size)
 						bytes = buffer->size - (unsigned long)binding->offset;
@@ -2291,6 +2313,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 		else
 		{
 			/* a constant attribute: from one vertex, read by every vertex */
+			again.in_place = FALSE;
 			if (!constants)
 			{
 				constants = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset,
@@ -2497,6 +2520,7 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 	D3DPRIMITIVETYPE type;
 	unsigned long vertex_end = first + count;
 
+	again.valid = FALSE;
 	debug_load();
 	if (debug.zclear_draw && gl.draws - frame_first_draw == debug.zclear_draw - 1)
 	{
@@ -2693,11 +2717,58 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 			x360_log("gl: draw %lu: %lu from %lu, mode 0x%x, program %u, inputs 0x%lx", gl.draws, count, first, mode,
 				gl.program, vertex->inputs);
 		IDirect3DDevice9_DrawVertices(gl.device, type, (UINT)first, (UINT)count);
+		again.valid = again.in_place && !debug.zclear_draw && !debug.dump_draw_count;
+		again.program = program;
 	}
 	gl.draws++;
 	targets_written();
 	if (debug.dump_draw_count && gl.frame == debug.dump_at)
 		dump_after_draw(gl.draws - 1 - frame_first_draw);
+}
+
+/* The last draw again, its vertices from `first` (d3d8_gl.c's visibility
+test runs, by name through SDL_GL_GetProcAddress): the caller has changed
+nothing since but the bound buffers' bytes and the queries, so the device
+already has the program, state and streams; only the draw call is made. A
+draw that cannot be repeated so is made in full. */
+static void console_gl_draw_again(GLenum mode, GLint first, GLsizei count)
+{
+	struct program *program = object_get(gl.program, _object_program);
+	unsigned long vertices = (unsigned long)count;
+	D3DPRIMITIVETYPE type;
+	LARGE_INTEGER start;
+	int index;
+
+	if (!again.valid || !program || program != again.program || first < 0)
+	{
+		draw(mode, (unsigned long)first, (unsigned long)count, 0, NULL, 0);
+		return;
+	}
+	/* (a texture it samples that a draw has made newer is resolved first,
+	by a draw in full) */
+	for (index = 0; index < program->uniform_count; index++)
+	{
+		struct uniform *uniform = &program->uniforms[index];
+		struct texture *texture;
+
+		if (!uniform->sampler || uniform->sampler_register < 0)
+			continue;
+		texture = unit_texture(uniform->unit, uniform->slot);
+		if (texture && texture->unresolved)
+		{
+			draw(mode, (unsigned long)first, (unsigned long)count, 0, NULL, 0);
+			return;
+		}
+	}
+	STATS_NOW(start);
+	type = primitive_type(mode, &vertices);
+	if (vertices)
+	{
+		IDirect3DDevice9_DrawVertices(gl.device, type, (UINT)first, (UINT)vertices);
+		gl.draws++;
+		targets_written();
+	}
+	stats.draw_ms += stats_ms_since(start);
 }
 
 /* ---------- blits: a textured quad */
@@ -2709,6 +2780,7 @@ static void blit_quad(struct texture *source, float u0, float v0, float u1, floa
 	int corner;
 	D3DVIEWPORT9 viewport;
 
+	again.valid = FALSE;
 	if (!gl.blit_vertex || !gl.blit_pixel || !source->d3d)
 		return;
 	for (corner = 0; corner < 4; corner++)
@@ -3199,6 +3271,7 @@ static void APIENTRY x360_glClear(GLbitfield mask)
 	D3DVECTOR4 color;
 	D3DRECT rectangle;
 
+	again.valid = FALSE;
 	if (!gl_ready())
 		return;
 	bind_targets();
@@ -4033,6 +4106,7 @@ void x360_gl_swap(void)
 
 static void x360_gl_swap_timed(void)
 {
+	again.valid = FALSE;
 	if (!gl_ready())
 		return;
 	debug_load();
@@ -4182,6 +4256,8 @@ static const struct
 	ENTRY(glVertexAttribIFormat) ENTRY(glVertexAttribIPointer) ENTRY(glVertexAttribPointer) ENTRY(glViewport)
 	/* (the optional ones the renderer manages without: glBufferStorage,
 	glCopyImageSubData, glMemoryBarrier, glDebugMessageCallback) */
+	/* (not GL's: the renderer's visibility test runs, d3d8_gl.c) */
+	{ "console_gl_draw_again", (void *)console_gl_draw_again },
 };
 
 void *x360_gl_function(const char *name)
