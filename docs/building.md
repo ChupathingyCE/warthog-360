@@ -35,9 +35,13 @@ from the SDK is in this repository, and none of it may be committed.
 ## 4. Configure and build
 
 ```sh
-python3 chupathingyce/configure.py --console-port port/xbox360 [--xdk360 DIR]
+python3 chupathingyce/configure.py --console-port port/xbox360 --console-no-debug-asserts [--xdk360 DIR]
 ninja xbox360
 ```
+
+`--console-no-debug-asserts` is the build for testers and test runs. Without
+it, every assert of the debug decomp runs on every tick and draw. The
+original Xbox's tester builds and the Wii U's CI builds use it too.
 
 The output is `build/xbox360/default.xex`. `ninja` reruns `configure.py`
 with the same options when the build's files change. Without the
@@ -47,7 +51,7 @@ toolchain or the SDK, `ninja xbox360` stops and says what is missing.
 | --- | --- |
 | `--console-debug-tools` | the developer tools: the probe triangle, the frame profiler, the GL layer's timers, the allocation counting, the bring-up logs and the test switches of `game:\gl.txt` |
 | `--console-players {16,24,32,64}` | the players the network tables hold; 16, the Xbox's, by default |
-| `--console-no-debug-asserts` | the debug decomp's asserts compiled out, as retail compiled them out |
+| `--console-no-debug-asserts` | the debug decomp's asserts compiled out, as retail compiled them out, except the memory checks (the tester build) |
 | `--release` | a failed assertion is logged and the game goes on |
 
 `ninja xbox360-game-objects` and `ninja xbox360-platform-objects` compile

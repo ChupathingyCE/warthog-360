@@ -127,21 +127,28 @@ static int header_end(const char *data, unsigned long size, unsigned long *total
 	return 0;
 }
 
-/* GET path from address:port (network order), with Host: host, into
-buffer (the whole response, never past size), within timeout_ms */
-static int http_get(unsigned long address, unsigned short port, const char *host, const char *path, char *buffer,
-	unsigned long size, unsigned long *received, unsigned long timeout_ms)
+/* GET path (or POST body, JSON, when it is not NULL) from address:port
+(network order), with Host: host, into buffer (the whole response, never
+past size), within timeout_ms */
+static int http_request(unsigned long address, unsigned short port, const char *host, const char *path,
+	const char *body, char *buffer, unsigned long size, unsigned long *received, unsigned long timeout_ms)
 {
-	char request[512];
+	char request[1024];
 	struct sockaddr_in target;
 	DWORD deadline = GetTickCount() + timeout_ms;
 	unsigned long sent = 0, total = 0;
 	int headers_done = 0, length, handle, result = GAME_LIST_OK;
 
 	*received = 0;
-	length = _snprintf(request, sizeof(request) - 1,
-		"GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: Warthog360/1\r\nAccept: text/plain\r\n"
-		"Accept-Encoding: identity\r\nConnection: close\r\n\r\n", path, host);
+	if (body)
+		length = _snprintf(request, sizeof(request) - 1,
+			"POST %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: Warthog360/1\r\nAccept: text/plain\r\n"
+			"Accept-Encoding: identity\r\nContent-Type: application/json\r\nContent-Length: %d\r\n"
+			"Connection: close\r\n\r\n%s", path, host, (int)strlen(body), body);
+	else
+		length = _snprintf(request, sizeof(request) - 1,
+			"GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: Warthog360/1\r\nAccept: text/plain\r\n"
+			"Accept-Encoding: identity\r\nConnection: close\r\n\r\n", path, host);
 	if (length <= 0 || length >= (int)sizeof(request) - 1)
 		return GAME_LIST_ERROR_SEND;
 	handle = posix_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -228,7 +235,7 @@ int x360_online_plain_get(const char *host, const char *path, char *response, un
 	unsigned long address = (unsigned long)posix_resolve_ipv4(host);
 
 	*received = 0;
-	return address && http_get(address, 80, host, path, response, size, received, timeout_ms) == GAME_LIST_OK &&
+	return address && http_request(address, 80, host, path, NULL, response, size, received, timeout_ms) == GAME_LIST_OK &&
 		*received > 0;
 }
 
@@ -352,8 +359,8 @@ static int fetch_once(char *buffer, int test, int attempt)
 	if (!address)
 		return GAME_LIST_ERROR_RESOLVE;
 	start = GetTickCount();
-	result = http_get(address, GAME_LIST_PORT, GAME_LIST_HOST, GAME_LIST_PATH, buffer, GAME_LIST_RESPONSE_SIZE,
-		&received, FETCH_TIMEOUT);
+	result = http_request(address, GAME_LIST_PORT, GAME_LIST_HOST, GAME_LIST_PATH, NULL, buffer,
+		GAME_LIST_RESPONSE_SIZE, &received, FETCH_TIMEOUT);
 	if (result == GAME_LIST_OK)
 		result = game_list_parse_response(buffer, received, &response);
 	if (result == GAME_LIST_OK && response.status != 200)
@@ -443,6 +450,30 @@ static DWORD WINAPI online_thread(LPVOID parameter)
 	list is never held up by it) */
 	x360_https_table_refresh();
 	return 0;
+}
+
+/* one request to the list's host (Link Profile's: src/x360_console_link.c),
+on the caller's thread: 1 with the answer's status and body (NUL
+terminated, cut to reply_size - 1), else 0 */
+int x360_online_request(const char *path, const char *body, int *status, char *reply, int reply_size)
+{
+	static char buffer[2048];
+	struct game_list_response response;
+	unsigned long address, received = 0, size;
+
+	if (reply_size <= 0 || !x360_network_start())
+		return 0;
+	address = posix_resolve_ipv4(GAME_LIST_HOST);
+	if (!address || http_request(address, GAME_LIST_PORT, GAME_LIST_HOST, path, body, buffer, sizeof(buffer),
+		&received, FETCH_TIMEOUT) != GAME_LIST_OK || game_list_parse_response(buffer, received, &response) != GAME_LIST_OK)
+	{
+		return 0;
+	}
+	*status = response.status;
+	size = response.body_size < (unsigned long)reply_size - 1 ? response.body_size : (unsigned long)reply_size - 1;
+	memcpy(reply, response.body, size);
+	reply[size] = 0;
+	return 1;
 }
 
 /* the start-up's self-test and first list (xbox360_platform.c) */

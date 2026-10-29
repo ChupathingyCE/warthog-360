@@ -52,6 +52,7 @@ TOOLS_DIR = relative(Path(__file__).resolve().parents[2] / "tools")
 LINUX_DIR = Path("port/linux")
 WINDOWS_DIR = Path("port/windows")
 CONSOLE_DIR = Path("port/console")
+CONSOLE_LINK_DIR = Path("port/console/link")
 
 TARGET_TRIPLE = "powerpc-unknown-none-elf"
 
@@ -145,6 +146,12 @@ GAME_FLAGS = [
 # original Xbox and the desktop builds have them (the game's
 # port/linux/game/ui_map_list.c, map_packs.c); the console list's packs=1
 MAP_LIST_DEFINES = ["-DHALO_MAP_LIST"]
+
+# Delta Peer as a client, as the original Xbox has it (the game's
+# port/linux/src/delta_peer_game.c): the console joins a Delta host by its
+# wire and range, whatever OpenCE number it announces, and takes the host's
+# game layout from the number it announced (network_client_manager.c)
+DELTA_DEFINES = ["-DHALO_CONSOLE_DELTA"]
 
 PLATFORM_FLAGS = [
     "-std=gnu11",
@@ -486,12 +493,14 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         *GAME_FLAGS,
         *defines,
         *MAP_LIST_DEFINES,
+        *DELTA_DEFINES,
         file_names,
         f"-include {_quote(prefix_header)}",
         f"-include {_quote(semantics_header)}",
         f"-I{crt_wrappers}",
         f"-I{_quote(PORT_DIR / 'include')}",
         f"-I{_quote(game / CONSOLE_DIR / 'include')}",
+        f"-I{_quote(game / CONSOLE_LINK_DIR)}",
         *shared_quotes,
         f"-iquote {_quote(game / LINUX_DIR / 'game')}",
         f"-iquote {_quote(game)}",
@@ -506,10 +515,14 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         *PLATFORM_FLAGS,
         *defines,
         *MAP_LIST_DEFINES,
+        *DELTA_DEFINES,
         file_names,
         version_define,
+        # (Delta Peer's PROFILE carries console_profile_id: src/x360_console_link.c)
+        "-DHALO_CONSOLE_PROFILE_ID",
         f"-include {_quote(prefix_header)}",
         f"-include {_quote(platform_semantics_header)}",
+        f"-I{_quote(game / CONSOLE_LINK_DIR)}",
         f"-I{_quote(posix_include)}",
         f"-I{_quote(windows_posix_include)}",
         f"-I{crt_wrappers}",
@@ -542,6 +555,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         f"-I{_quote(windows_posix_include)}",
         f"-I{_quote(PORT_DIR / 'include' / 'crt')}",
         f"-I{_quote(game / LINUX_DIR / 'src')}",
+        f"-I{_quote(game / CONSOLE_LINK_DIR)}",
         f"-I{_quote(PORT_DIR / 'include')}",
         f"-I{_quote(SDL_INCLUDE)}",
         f"-I{_quote(gen_dir)}",
@@ -576,6 +590,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     # the port's own game code: ONLINE GAMES (game/x360_browser_screen.c)
     for source in sorted((PORT_DIR / "game").glob("*.c")):
         add_object(source, game_cflags, [*implicit_common, semantics_header, PORT_DIR / "include" / "x360_game_list.h"])
+    # Link Profile's panel over ONLINE GAMES (the game's port/console/link)
+    add_object(game / CONSOLE_LINK_DIR / "console_link_panel.c", game_cflags, [*implicit_common, semantics_header])
     game_objects = objects[game_objects_start:]
 
     platform_objects_start = len(objects)
@@ -586,6 +602,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
             continue
         add_object(source, https_platform_cflags if source.name in HTTPS_PLATFORM_SOURCES else platform_cflags,
                    [*implicit_common, platform_semantics_header])
+    # Link Profile with the console's own key, over src/x360_console_link.c's hooks
+    add_object(game / CONSOLE_LINK_DIR / "console_link.c", platform_cflags, [*implicit_common, platform_semantics_header])
     # the C runtime's file functions with Xbox paths, as on Windows
     add_object(game / WINDOWS_DIR / "src" / "windows_crt.c", platform_cflags,
                [*implicit_common, platform_semantics_header])
