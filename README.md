@@ -106,9 +106,14 @@ You need:
 Build:
 
 ```sh
-python3 chupathingyce/configure.py --console-port port/xbox360 [--xdk360 /path/to/XDK]
+python3 chupathingyce/configure.py --console-port port/xbox360 --console-no-debug-asserts [--xdk360 /path/to/XDK]
 ninja xbox360                       # build/xbox360/default.xex
 ```
+
+`--console-no-debug-asserts` is the build testers get, as on the Wii U
+and the original Xbox. It is faster on the console: the debug decomp's
+asserts are compiled out, as the retail game had them, except the memory
+checks. Leave it out for a build that stops at the first failed assert.
 
 Without the toolchain or the SDK, `ninja xbox360` says what is missing.
 `--console-debug-tools` adds the developer tools (the frame profiler, the
