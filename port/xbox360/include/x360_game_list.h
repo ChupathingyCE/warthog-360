@@ -1,9 +1,10 @@
 /*
 X360_GAME_LIST.H
 
-The console game list on the Xbox 360: warthog.milenko.org's plain HTTP
-list (GET /v1/console/games, the site's list for consoles), fetched over
-HTTP/1.0 on a thread of its own (src/x360_online.c), the response and the
+The console game list on the Xbox 360: the site's list for consoles (GET
+/v1/console/games), over HTTPS from stats.chupathingy.org
+(src/x360_https.c), else over plain HTTP/1.0 from warthog.milenko.org, on a
+thread of its own (src/x360_online.c), the response and the
 list parsed with bounds on everything (src/game_list_parse.c). The site's
 text is untrusted: no length or count from it is believed past these
 limits.

@@ -9,14 +9,19 @@ waits on them:
 2. DNS: warthog.milenko.org looked up.
 3. UDP: a datagram to this console's own port (127.0.0.1, which x360_net.c
    sends to the console's address), read back.
-4. HTTP: GET /v1/console/games?coop=1&packs=1 from warthog.milenko.org, plain
-   HTTP/1.0 as the original Xbox asks for it, parsed; the list is the
-   Multiplayer menu's ONLINE GAMES (game/x360_browser_screen.c).
+4. HTTP: GET /v1/console/games?coop=1&packs=1 over HTTPS from
+   stats.chupathingy.org (x360_https.c, the site's key pinned), or, when
+   that fails, over plain HTTP/1.0 from warthog.milenko.org, as the original
+   Xbox asks for it, parsed; the list is the Multiplayer menu's ONLINE GAMES
+   (game/x360_browser_screen.c).
 
 Each step is one line in game:\port.txt and on the debug channel ("net
 test: ..."). Never an address: only its kind, as x360_net.c logs them.
 The sockets are x360_net.c's (posix.h), so the list and the self-test go
 through what the game's own networking uses.
+
+The same thread then fetches the signed legacy table when it is due
+(x360_https_table_refresh), so its stack has room for HTTPS.
 */
 
 #include <xtl.h>
@@ -27,6 +32,8 @@ through what the game's own networking uses.
 #include "posix.h"
 #include "x360_port.h"
 #include "x360_game_list.h"
+#include "console_https.h"
+#include "delta.h"
 
 /* (the game's network_distributed.c) the messages turned to the PC's byte order and
 back, against the PC's bytes; the count that differ */
@@ -36,6 +43,10 @@ long network_wire_self_test(char *report, long report_size);
 #define ATTEMPTS 3
 #define RETRY_WAIT 10000
 #define ECHO_WAIT 2000
+/* the response's buffer and the fetch's frames, CONSOLE_HTTPS_STACK_SIZE
+more the TLS session's arena and Mbed TLS's frames, and
+DELTA_REFRESH_STACK_SIZE the signed table's document */
+#define LIST_THREAD_STACK (64 * 1024 + CONSOLE_HTTPS_STACK_SIZE + DELTA_REFRESH_STACK_SIZE)
 
 enum
 {
@@ -52,11 +63,17 @@ static volatile LONG list_state = _list_idle;
 static int list_taken = 1;
 static struct game_list fetched;
 static int list_error;
+/* the list came over HTTPS; HTTPS was refused for good (a key or a name) */
+static int list_secure;
+static int https_refused;
 /* the main thread's: the last list that came, kept while a refresh fails */
 static struct game_list shown;
 static int shown_lists;
 static int shown_error;
 static int shown_state = X360_GAME_LIST_NONE;
+/* (whether the list being taken came over HTTPS: the fetch's thread writes
+it before the state) */
+static int shown_secure_next;
 /* the self-test runs once, before the first fetch */
 static int self_tested;
 
@@ -212,6 +229,16 @@ static int http_request(unsigned long address, unsigned short port, const char *
 	return result;
 }
 
+int x360_online_plain_get(const char *host, const char *path, char *response, unsigned long size,
+	unsigned long *received, unsigned long timeout_ms)
+{
+	unsigned long address = (unsigned long)posix_resolve_ipv4(host);
+
+	*received = 0;
+	return address && http_request(address, 80, host, path, NULL, response, size, received, timeout_ms) == GAME_LIST_OK &&
+		*received > 0;
+}
+
 /* ---------- the self-test's UDP step */
 
 /* a datagram to this console's own port, read back: 1 if it came back
@@ -264,13 +291,63 @@ static int udp_echo(DWORD *milliseconds, const char **failure)
 
 /* ---------- the list */
 
-static int fetch_once(char *buffer, int test)
+/* the list over HTTPS from the site (its key pinned: the game's
+docs/console-https.md): GAME_LIST_OK and the list, or another result and
+the plain HTTP list is asked instead */
+static int fetch_https(char *buffer, int test)
 {
 	struct game_list_response response;
-	unsigned long address, received = 0;
+	unsigned long received = 0;
 	DWORD start = GetTickCount();
 	int result;
 
+	result = console_https_request(CONSOLE_HTTPS_SITE, GAME_LIST_PATH, NULL, NULL, buffer, GAME_LIST_RESPONSE_SIZE,
+		&received, FETCH_TIMEOUT);
+	if (result != CONSOLE_HTTPS_OK)
+	{
+		x360_log("game list: HTTPS: %s; asking over plain HTTP", console_https_error_string(result));
+		/* (a key or a name refused is refused again: plain HTTP for the rest
+		of this run) */
+		if (result == CONSOLE_HTTPS_ERROR_KEY || result == CONSOLE_HTTPS_ERROR_NAME)
+			https_refused = 1;
+		return GAME_LIST_ERROR_CONNECT;
+	}
+	result = game_list_parse_response(buffer, received, &response);
+	if (result != GAME_LIST_OK)
+		return result;
+	if (response.status != 200)
+	{
+		x360_log("game list: HTTPS: status %d; asking over plain HTTP", response.status);
+		return GAME_LIST_ERROR_HTTP;
+	}
+	result = game_list_parse(response.body, response.body_size, &fetched);
+	if (result == GAME_LIST_OK)
+	{
+		list_secure = 1;
+		if (test)
+			x360_log("net test: HTTPS GET %s from %s: status 200, %lu bytes, %d games (%lu ms)", GAME_LIST_PATH,
+				CONSOLE_HTTPS_SITE, received, fetched.count, (unsigned long)(GetTickCount() - start));
+	}
+	return result;
+}
+
+static int fetch_once(char *buffer, int test, int attempt)
+{
+	struct game_list_response response;
+	unsigned long address, received = 0;
+	DWORD start;
+	int result;
+
+	list_secure = 0;
+	/* (HTTPS first, on each refresh's first try; a list that came over it
+	ends the fetch, anything else falls back) */
+	if (attempt == 1 && !https_refused && console_https_available())
+	{
+		result = fetch_https(buffer, test);
+		if (result == GAME_LIST_OK || result == GAME_LIST_ERROR_FORMAT)
+			return result;
+	}
+	start = GetTickCount();
 	address = posix_resolve_ipv4(GAME_LIST_HOST);
 	if (test)
 	{
@@ -349,9 +426,12 @@ static DWORD WINAPI online_thread(LPVOID parameter)
 		set_state(_list_failed);
 		return 0;
 	}
+	x360_https_start();
+	x360_log("game list: getting %s%s", https_refused ? "http://" GAME_LIST_HOST : "https://" CONSOLE_HTTPS_SITE,
+		GAME_LIST_PATH);
 	for (attempt = 1; attempt <= ATTEMPTS; attempt++)
 	{
-		result = fetch_once(buffer, test && attempt == 1);
+		result = fetch_once(buffer, test && attempt == 1, attempt);
 		if (result == GAME_LIST_OK || result == GAME_LIST_ERROR_FORMAT)
 			break;
 		x360_log("game list: try %d of %d: %s", attempt, ATTEMPTS, game_list_error_string(result));
@@ -360,11 +440,15 @@ static DWORD WINAPI online_thread(LPVOID parameter)
 	}
 	list_error = result;
 	if (result == GAME_LIST_OK)
-		x360_log("game list: %d games (format %d)%s", fetched.count, fetched.format,
-			fetched.skipped ? ", some lines left out" : "");
+		x360_log("game list: %d games (format %d) over %s%s", fetched.count, fetched.format,
+			list_secure ? "HTTPS" : "plain HTTP", fetched.skipped ? ", some lines left out" : "");
 	if (test)
 		x360_log("net test: done");
+	shown_secure_next = list_secure;
 	set_state(result == GAME_LIST_OK ? _list_done : _list_failed);
+	/* (the signed legacy table, when it is due: after the list, so that the
+	list is never held up by it) */
+	x360_https_table_refresh();
 	return 0;
 }
 
@@ -408,8 +492,8 @@ void x360_game_list_request(void)
 	list_taken = 0;
 	shown_state = X360_GAME_LIST_FETCHING;
 	set_state(_list_fetching);
-	/* (64 KB: the response's buffer and the fetch's frames) */
-	thread = CreateThread(NULL, 64 * 1024, online_thread, NULL, 0, NULL);
+	/* (LIST_THREAD_STACK, given back when the thread ends) */
+	thread = CreateThread(NULL, LIST_THREAD_STACK, online_thread, NULL, 0, NULL);
 	if (!thread)
 	{
 		list_error = GAME_LIST_ERROR_CONNECT;
@@ -439,6 +523,9 @@ static void take(void)
 	memcpy(&shown, &fetched, sizeof(shown));
 	shown_error = GAME_LIST_OK;
 	shown_state = X360_GAME_LIST_READY;
+	if (!shown_lists)
+		x360_log("game list: %d games from %s", shown.count,
+			shown_secure_next ? CONSOLE_HTTPS_SITE " (HTTPS)" : GAME_LIST_HOST " (plain HTTP)");
 	shown_lists++;
 }
 
