@@ -2,35 +2,36 @@
 
 <h1 align="center">Warthog 360</h1>
 
-<p align="center"><b>Chupathingy on the Xbox 360: homebrew for RGH and JTAG consoles, and development kits.</b></p>
+<p align="center"><b>Chupathingy on the Xbox 360.</b></p>
 
 <p align="center">
-<a href="https://github.com/ChupathingyCE/chupathingyce">The game (Chupathingy)</a> ·
-<a href="https://github.com/ChupathingyCE/warthog-xbox">Warthog (original Xbox)</a> ·
+<a href="https://discord.gg/chupathingy">Get the test build (Discord, #xbox-360)</a> ·
 <a href="https://stats.chupathingy.org">Games online now</a> ·
-<a href="https://discord.gg/chupathingy">Discord</a>
+<a href="https://github.com/ChupathingyCE/chupathingyce">The game</a> ·
+<a href="https://chupathingy.org">chupathingy.org</a>
 </p>
 
-Warthog 360 is the Halo: Combat Evolved decompilation built for the Xbox
-360, on the same game code as
-[Chupathingy](https://github.com/ChupathingyCE/chupathingyce) (the Windows,
-Mac, Linux and Android builds) and
-[Warthog](https://github.com/ChupathingyCE/warthog-xbox) (the original
-Xbox). It runs as homebrew on an RGH or JTAG console, or on a development
-kit.
+<p align="center"><img src="docs/screenshots/xbox-360.jpg" width="640" alt="Blood Gulch on an Xbox 360"></p>
 
-This repository holds the Xbox 360 port only. The game is the
-`chupathingyce` submodule.
+Play Chupathingy as homebrew on an RGH or JTAG Xbox 360, started from a
+launcher such as Aurora. Join the same online games as PCs and other
+consoles.
 
-You need your own copy of Halo. No SDK files or game files are included.
-There is a test build, shared on the [Discord](https://discord.gg/chupathingy)
-(#xbox-360); you can also build it yourself.
+**Status: early test build.** Multiplayer maps load and play, and the
+console joins servers through Online Games. The campaign isn't a goal yet.
+Expect lag, some noise in the picture over time, and a flickering HUD.
+We're working on all three.
 
-## Status
+Test builds are shared in #xbox-360 on the [Discord](https://discord.gg/chupathingy).
+You can also build it yourself (below).
 
-**Test build.** Chupathingy plays on an RGH Xbox 360: Blood Gulch and the
-multiplayer maps load, draw and play, and the console lists and joins servers
-online through ONLINE GAMES. It is early and has had little time on hardware.
+You need your own copy of Halo. No game files or SDK files are included.
+
+This repository holds the Xbox 360 port. The game itself is the
+`chupathingyce` submodule. The original Xbox port is
+[warthog-xbox](https://github.com/ChupathingyCE/warthog-xbox).
+
+## Details
 
 - **Multiplayer:** the focus. The campaign is not a goal yet.
 - **Networking:** joins PC and server games. The game's messages go on the
@@ -201,7 +202,7 @@ The port's history up to this repository is in
 - Discord: [discord.gg/chupathingy](https://discord.gg/chupathingy)
   (#warthog-support for help, #warthog-dev for development)
 
-Halo is a trademark of Microsoft. Warthog is a fan project, not made or
-endorsed by Microsoft, Bungie or 343 Industries, and includes none of the
-game's content. The code is released under the GNU GPL, version 3 or later
+Warthog is an unofficial fan project. It isn't affiliated with or endorsed
+by Microsoft, Xbox Game Studios, Bungie or Halo Studios. Halo is a trademark
+of Microsoft. No game files are included: you bring your own copy. The code is released under the GNU GPL, version 3 or later
 (see [License](#license)).
