@@ -59,9 +59,10 @@ BOOL platform_sdl_initialize(void)
 }
 
 /* the maps are the player's, in the title's folder */
-BOOL platform_offer_game_data(const char *destination)
+BOOL platform_offer_game_data(char *destination, unsigned long size)
 {
 	(void)destination;
+	(void)size;
 	platform_log("no maps: put the maps folder (ui.map and the levels) beside default.xex");
 	return FALSE;
 }
