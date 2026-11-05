@@ -6,6 +6,8 @@
 
 Blood Gulch loads, draws and plays (driven in a Ghost on hardware, still a little laggy). Networking works on hardware: the console lists and joins servers (below). A multiplayer game plays on the console. The campaign is not a goal yet. There is no high-res HUD on the 360: it is built without the high-res HUD's pictures, and the maps' own HUD is drawn. The build is a console build (`HALO_CONSOLE`): the desktop extras stay out until the baseline holds, then come back one at a time. It is sized for the 360's 512 MB, not the original Xbox's 64 MB.
 
+Test build 2 (2026-11-05, game 0.9.0) reaches the main menu and plays Blood Gulch in Xenia ("Smoke test in Xenia", below). It has not run on a console yet. The network tables hold 16 players (`--console-players`, 16 by default).
+
 Known issues, under investigation:
 
 - A progressive, film-grain-like noise in the picture over time.
@@ -23,7 +25,7 @@ How it is put together:
 
 ## Requirements
 
-- [OXDK360](https://github.com/MrMilenko/OXDK360) in `~/OXDK360` or `~/OXDK/xbox360` (`--oxdk360 DIR`), with `tools/cxex` built.
+- [OXDK](https://github.com/MrMilenko/OXDK)'s Xbox 360 tools, its `xbox360` folder: `~/OXDK/xbox360` (`--oxdk360 DIR`; an old OXDK360 checkout in `~/OXDK360` is found too), with `tools/cxex` built.
 - Its patched clang (the Xenon calling convention) in `~/llvm-xenon` (`--llvm-xenon DIR`).
 - Your own extracted Xbox 360 SDK, the folder holding `lib/xbox/xboxkrnl.lib` (`--xdk360 DIR` or `XDK_DIR`). Without it there is no target, and `ninja xbox360` says what is missing. Nothing from the SDK is in this repository, and none of it may be committed.
 
@@ -105,18 +107,18 @@ Logs never show an address, only its kind (private, public).
 
 ## Notes for the port
 
-From earlier OXDK360 ports, and what phase 0 is built around:
+From earlier ports built with OXDK's Xbox 360 tools, and what phase 0 is built around:
 
 - Paths: backslashes only, and device names longer than a letter (`game:`). A forward slash fails silently on writes, and `path[1] == ':'` checks miss the device.
 - `game:` is writable when launched from Aurora; `Hdd:` and `Hdd1:` may not be mounted.
 - Exit with `XLaunchNewImage("", 0)`. Tearing Direct3D or sound down mid-present can hang the console.
-- OXDK360's clang returns 64-bit values in a register pair where the SDK uses one register: an SDK call returning a 64-bit value (file positions, `_time64`) comes back wrong. Build with `-D_USE_32BIT_TIME_T=1`.
+- OXDK's patched clang returns 64-bit values in a register pair where the SDK uses one register: an SDK call returning a 64-bit value (file positions, `_time64`) comes back wrong. Build with `-D_USE_32BIT_TIME_T=1`.
 - Variadic doubles format as garbage: `%f` through the SDK's `printf` family is broken. The game's debug and HUD text use it widely.
 - `_byteswap_ushort`, `_ulong` and `_uint64` are declared by the SDK and defined nowhere: the port provides them as functions (not macros).
 - No C++ exceptions, no VMX128 (XNA math is the scalar fallback), no `vsnprintf` (`_vsnprintf`).
 - Direct3D 9 on Xenos has no fixed function and no `UpdateTexture`; textures are tiled (linear uploads use the `D3DFMT_LIN_*` formats). Shaders are compiled offline with the SDK's `fxc` under Wine (`/Zpr`, `row_major`).
 - The XEX's DOS header: cxex writes only `MZ` and the PE header's offset, and Xenia refuses an image without the header Microsoft's linker writes. `tools/xbox360_dos_header.py` writes that header and stub after each link, and updates the image's hash to match.
-- The SDK's `.XBMOVIE$` sections hold variables its libraries write (XAudio2 sets one when it makes its mastering voice). Microsoft's linker puts them in a writable section; OXDK360's `title.ld` put them in the read-only data. The build links with a copy of that script that moves them to `.data` (`tools/xbox360_linker_script.py`).
+- The SDK's `.XBMOVIE$` sections hold variables its libraries write (XAudio2 sets one when it makes its mastering voice). Microsoft's linker puts them in a writable section; OXDK's `title.ld` puts them in the read-only data. The build links with a copy of that script that moves them to `.data` (`tools/xbox360_linker_script.py`).
 - Big-endian: every binary loader byte-swaps after its reads, and unaligned `*(int *)` reads fault; use memcpy readers. Pointer and integer type mismatches are real bugs here: don't silence them.
 
 ## Compile census
