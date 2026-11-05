@@ -13,9 +13,9 @@
 
 <p align="center"><img src="docs/screenshots/xbox-360.jpg" width="640" alt="Blood Gulch on an Xbox 360"></p>
 
-Play Chupathingy as homebrew on an RGH or JTAG Xbox 360, started from a
-launcher such as Aurora. Join the same online games as PCs and other
-consoles.
+Play Chupathingy as homebrew on an RGH/JTAG 360, or one running a softmod
+like BadUpdate or BadAvatar, started from a launcher such as Aurora. Join
+the same online games as PCs and other consoles.
 
 **Status: early test build.** Multiplayer maps load and play, and the
 console joins servers through Online Games. The campaign isn't a goal yet.
@@ -52,8 +52,9 @@ issues and the developer tools.
 
 ## What you need
 
-- **A console that runs your own code.** An RGH or JTAG Xbox 360, started
-  from a launcher such as Aurora, or a development kit.
+- **A console that runs your own code.** An RGH/JTAG 360, or one running a
+  softmod like BadUpdate or BadAvatar, started from a launcher such as
+  Aurora, or a development kit.
 - **Your own Halo maps.** The original Xbox's North American (NTSC)
   release, 01.10.12.2276, as every Chupathingy build and server uses.
   Warthog never provides maps, disc images or other game data, and never
@@ -63,7 +64,7 @@ issues and the developer tools.
 
 ## Install
 
-With Aurora (or another launcher for RGH and JTAG consoles):
+With Aurora (or another launcher for homebrew):
 
 1. Get `default.xex`: the test build from the Discord, or build it yourself
    (see "Building it yourself").
