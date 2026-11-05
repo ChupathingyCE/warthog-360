@@ -46,6 +46,26 @@ Every build stamps its first log line with the version, commit and build time, s
 
 Put `default.xex` in a folder of its own on the console (`Hdd1:\Games\Warthog360\`), with the Xbox disc's `maps` folder beside it (the NTSC maps, 01.10.12.2276: at least `ui.map`). The log is on the debug channel (XBDM) and in `game:\port.txt` (the console's layer) and `game:\debug.txt` (the game's). Settings are `game:\config.toml`, written at the first start.
 
+## Smoke test in Xenia
+
+`tools/xenia_smoke.sh` boots `default.xex` in Xenia Canary (the Linux build) twice: once to the main menu, then straight into Blood Gulch, which it runs for 60 seconds. It needs Xvfb, Vulkan (Mesa's llvmpipe works, slowly), python3, a C compiler, and a script that makes a data root of links to your own maps. The maps are linked, never copied. Xenia's settings, content and cache stay in the test's folder. A pass in Xenia is not a pass on an Xbox 360.
+
+From a Mac, run it on a Linux machine you can reach over ssh:
+
+```sh
+tools/xenia_smoke_remote.sh --host linux-box \
+    --xenia '~/emulators/xenia-canary/xenia_canary' \
+    --maps-root '~/halo-maps/new-data-root.sh'
+```
+
+`XENIA_SMOKE_HOST`, `XENIA_SMOKE_XENIA` and `XENIA_SMOKE_MAPS_ROOT` stand in for the three options. The script copies the build to a new folder on the host, runs the test there, brings the logs back to `build/xbox360/xenia-smoke`, and removes the folder (`--keep` leaves it). `--map`, `--seconds` and `--timeout` go to the test.
+
+What the test works around in Xenia:
+
+- No sound: it runs with `--apu=nop`, where XAudio2 cannot make its mastering voice. The game says so and goes on silent.
+- Xenia's Linux build opens a file asked for with read and write access as write-only, so every read of the game's cache files fails. The test preloads a small library into Xenia that opens such files in its own folder for reading too.
+- Xenia leaves files in `/dev/shm` when it is killed. The test removes the ones it made.
+
 ## Developer tools
 
 A normal build has none of the following. Configured with `--console-debug-tools` (`HALO_CONSOLE_DEBUG_TOOLS`), the build adds them; the code is kept, off by default:
@@ -95,6 +115,8 @@ From earlier OXDK360 ports, and what phase 0 is built around:
 - `_byteswap_ushort`, `_ulong` and `_uint64` are declared by the SDK and defined nowhere: the port provides them as functions (not macros).
 - No C++ exceptions, no VMX128 (XNA math is the scalar fallback), no `vsnprintf` (`_vsnprintf`).
 - Direct3D 9 on Xenos has no fixed function and no `UpdateTexture`; textures are tiled (linear uploads use the `D3DFMT_LIN_*` formats). Shaders are compiled offline with the SDK's `fxc` under Wine (`/Zpr`, `row_major`).
+- The XEX's DOS header: cxex writes only `MZ` and the PE header's offset, and Xenia refuses an image without the header Microsoft's linker writes. `tools/xbox360_dos_header.py` writes that header and stub after each link, and updates the image's hash to match.
+- The SDK's `.XBMOVIE$` sections hold variables its libraries write (XAudio2 sets one when it makes its mastering voice). Microsoft's linker puts them in a writable section; OXDK360's `title.ld` put them in the read-only data. The build links with a copy of that script that moves them to `.data` (`tools/xbox360_linker_script.py`).
 - Big-endian: every binary loader byte-swaps after its reads, and unaligned `*(int *)` reads fault; use memcpy readers. Pointer and integer type mismatches are real bugs here: don't silence them.
 
 ## Compile census
