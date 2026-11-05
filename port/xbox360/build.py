@@ -380,7 +380,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     objcopy = _llvm_tool(llvm_bin, "llvm-objcopy")
     oxdklink = oxdk360 / "tools" / "oxdklink" / "oxdklink.py"
     cxex = oxdk360 / "tools" / "cxex" / "cxex"
-    linker_script = oxdk360 / "oxdk360" / "title.ld"
+    oxdk360_linker_script = oxdk360 / "oxdk360" / "title.ld"
     builtins = oxdk360 / "oxdk360" / "builtins" / "builtins.c"
 
     build_dir: Path = sln.build_dir / "xbox360"
@@ -389,6 +389,9 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     xex = build_dir / "default.xex"
     stamp = gen_dir / "xbox360_build_stamp.h"
     semantics_header = gen_dir / "halo_msvc_semantics.h"
+    # OXDK360's, with the XDK's writable .XBMOVIE$ data out of the read-only
+    # pages (tools/xbox360_linker_script.py)
+    linker_script = gen_dir / "title.ld"
     platform_semantics_header = gen_dir / "platform_msvc_semantics.h"
     prefix_header = PORT_DIR / "include" / "halo_xbox360_prefix.h"
     xdk_include = game / XDK_INCLUDE
@@ -409,10 +412,17 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         depfile="$out.d",
         deps="gcc",
     )
+    # (then the DOS header Microsoft's linker writes, which cxex leaves
+    # zero and Xenia checks: tools/xbox360_dos_header.py)
     n.rule(
         name="xbox360_xex",
-        command="$xbox360_link $in -o $out $ldflags",
+        command=f"$xbox360_link $in -o $out $ldflags && $python {_quote(TOOLS_DIR / 'xbox360_dos_header.py')} $out",
         description="XBOX360 XEX $out",
+    )
+    n.rule(
+        name="xbox360_linker_script",
+        command=f"$python {_quote(TOOLS_DIR / 'xbox360_linker_script.py')} $in $out",
+        description="XBOX360 LINKER SCRIPT $out",
     )
     n.rule(
         name="xbox360_stamp",
@@ -437,6 +447,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     # which build ran
     n.build(outputs="xbox360_always", rule="phony")
     n.build(outputs=stamp, rule="xbox360_stamp", implicit=["xbox360_always", TOOLS_DIR / "xbox360_stamp.py"])
+    n.build(outputs=linker_script, rule="xbox360_linker_script", inputs=oxdk360_linker_script,
+            implicit=[TOOLS_DIR / "xbox360_linker_script.py"])
 
     game_headers = port.game_headers()
     n.build(
@@ -675,7 +687,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         outputs=xex,
         rule="xbox360_xex",
         inputs=objects,
-        implicit=[p for p in (linker_script, cxex, oxdklink) if p.is_file()],
+        implicit=[linker_script, *(p for p in (cxex, oxdklink) if p.is_file()), TOOLS_DIR / "xbox360_dos_header.py"],
         variables={"ldflags": " ".join(ldflags_list)},
     )
     n.build(outputs="xbox360", rule="phony", inputs=xex)
