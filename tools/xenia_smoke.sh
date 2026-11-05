@@ -23,16 +23,14 @@
 #
 # The first boot passes when the game starts the main menu's music; the
 # second when the map has loaded and the game has run it for --seconds
-# without a halt. Either fails on the game's EXCEPTION halt, on Xenia
+# without a halt. Either fails on a halt (the game's EXCEPTION halt, or
+# the port's "x360: halted"), on Xenia
 # leaving, or on the time running out.
 #
-# Two things only the test does, both to the test's copy:
-# - Xenia loads an image only when its DOS header's third byte is 0x90, as
-#   Microsoft's linker writes it (Xenia's XexModule::is_valid_executable).
-#   lld leaves it 0, which the console does not check. The copy of
-#   default.xex the test runs has it set; Xenia checks no hashes.
-# - The second boot loads its map with the game's own d:\init.txt in the
-#   test's game folder.
+# The second boot loads its map with the game's own d:\init.txt in the
+# test's game folder. The XEX runs as it was built: ninja xbox360 gives it
+# the DOS header Microsoft's linker writes, which Xenia checks
+# (tools/xbox360_dos_header.py), and the test stops early on one without it.
 # Xenia writes in the game's folder only with --allow_game_relative_writes,
 # which the test gives it (the game keeps its settings and logs there).
 #
@@ -87,7 +85,13 @@ touch "$out/.xenia-smoke"
 
 xvfb_pid=
 xenia_pid=
+# (Xenia keeps its guest memory and code in /dev/shm, and leaves them there
+# when it is killed: hundreds of MB a run, until /dev/shm is full and the
+# next Xenia stops while it starts. The ones that were not there before the
+# test are removed.)
+shm_before=$(ls /dev/shm 2> /dev/null | grep '^xenia_' || true)
 stop_xenia() {
+	local file
 	if [ -n "$xenia_pid" ] && kill -0 "$xenia_pid" 2> /dev/null; then
 		kill "$xenia_pid" 2> /dev/null || true
 		for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -95,8 +99,14 @@ stop_xenia() {
 			sleep 1
 		done
 		kill -9 "$xenia_pid" 2> /dev/null || true
+		wait "$xenia_pid" 2> /dev/null || true
 	fi
 	xenia_pid=
+	for file in /dev/shm/xenia_*; do
+		if [ -f "$file" ] && ! printf '%s\n' "$shm_before" | grep -q -x -F -- "${file##*/}"; then
+			rm -f "$file"
+		fi
+	done
 }
 finish() {
 	stop_xenia
@@ -115,22 +125,92 @@ if [ -z "$display" ]; then
 	sleep 2
 fi
 
-# the test's game folder: a copy of the build (with the DOS byte above), and
-# the maps as links, each file on its own
+# Xenia's Linux build opens a file asked for with GENERIC_READ |
+# GENERIC_WRITE as O_WRONLY (FileHandle::OpenExisting in
+# base/filesystem_posix.cc, at least to 02d2cb5), so every read of a file
+# the game opened to read and write fails, and Xenia reports it as the end
+# of the file. The game's cache files are opened that way, as on the Xbox,
+# so no map loaded ("the map 'ui' is in no cache file"). A small library the
+# test preloads into Xenia opens such files under the test's folder for
+# reading too, as Windows would. It needs a C compiler on the machine; the
+# test says so when there is none.
+shim="$out/shim/xenia_rdwr.so"
+mkdir -p "$out/shim"
+cat > "$out/shim/xenia_rdwr.c" <<'EOF'
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* open(): a file under XENIA_RDWR_ROOT opened write-only is opened for
+reading too */
+static int adjust(const char *path, int flags)
+{
+	const char *root = getenv("XENIA_RDWR_ROOT");
+
+	if (root && path && (flags & O_ACCMODE) == O_WRONLY && !strncmp(path, root, strlen(root)))
+		flags = (flags & ~O_ACCMODE) | O_RDWR;
+	return flags;
+}
+
+int open(const char *path, int flags, ...)
+{
+	static int (*real_open)(const char *, int, ...);
+	mode_t mode = 0;
+
+	if (flags & (O_CREAT | O_TMPFILE))
+	{
+		va_list arguments;
+
+		va_start(arguments, flags);
+		mode = va_arg(arguments, mode_t);
+		va_end(arguments);
+	}
+	if (!real_open)
+		real_open = (int (*)(const char *, int, ...))dlsym(RTLD_NEXT, "open");
+	return real_open(path, adjust(path, flags), mode);
+}
+
+int open64(const char *path, int flags, ...)
+{
+	static int (*real_open64)(const char *, int, ...);
+	mode_t mode = 0;
+
+	if (flags & (O_CREAT | O_TMPFILE))
+	{
+		va_list arguments;
+
+		va_start(arguments, flags);
+		mode = va_arg(arguments, mode_t);
+		va_end(arguments);
+	}
+	if (!real_open64)
+		real_open64 = (int (*)(const char *, int, ...))dlsym(RTLD_NEXT, "open64");
+	return real_open64(path, adjust(path, flags), mode);
+}
+EOF
+if ! cc -shared -fPIC -O2 -o "$shim" "$out/shim/xenia_rdwr.c" -ldl 2> "$out/shim/cc.log"; then
+	echo "$0: cannot build the preload library (a C compiler is needed: $out/shim/cc.log); no map will load" >&2
+	shim=
+fi
+
+# the test's game folder: a copy of the build, and the maps as links, each
+# file on its own
 game="$out/game"
 rm -rf "$game" "$out/xenia"
 mkdir -p "$game/maps" "$out/xenia/storage" "$out/xenia/content" "$out/xenia/cache"
-python3 -I - "$xex" "$game/default.xex" <<'EOF'
+python3 -I - "$xex" <<'EOF'
 import struct, sys
-data = bytearray(open(sys.argv[1], "rb").read())
+data = open(sys.argv[1], "rb").read()
 if data[:4] != b"XEX2":
     sys.exit("not an XEX2 file")
 image = struct.unpack(">I", data[8:12])[0]
-if data[image:image + 2] != b"MZ":
-    sys.exit("the image does not start with MZ (a compressed or encrypted XEX?)")
-data[image + 2] = 0x90
-open(sys.argv[2], "wb").write(data)
+if data[image:image + 4] != b"MZ\x90\x00":
+    sys.exit("its DOS header is not the one Xenia loads (built before tools/xbox360_dos_header.py?)")
 EOF
+cp "$xex" "$game/default.xex"
 data="$out/data"
 "$maps_root" "$data" > /dev/null
 linked=0
@@ -174,7 +254,7 @@ phase() {
 		printf '%s\r\n' "$init" > "$game/init.txt"
 	fi
 	echo "$name: starting Xenia"
-	DISPLAY=$display "$xenia" --gpu=vulkan --apu=nop --allow_game_relative_writes=true \
+	DISPLAY=$display XENIA_RDWR_ROOT="$out/" LD_PRELOAD="$shim" "$xenia" --gpu=vulkan --apu=nop --allow_game_relative_writes=true \
 		--storage_root="$out/xenia/storage" --content_root="$out/xenia/content" --cache_root="$out/xenia/cache" \
 		--log_file="$logs/xenia.log" "$game/default.xex" > "$logs/xenia.out" 2>&1 &
 	xenia_pid=$!
@@ -187,8 +267,8 @@ phase() {
 			break
 		fi
 		logs_found=$(ls "$game/logs/debug.txt" "$game/port.txt" "$game/debug.txt" 2> /dev/null || true)
-		if [ -n "$logs_found" ] && grep -q -h "EXCEPTION halt" $logs_found; then
-			reason="the game halted: $(grep -h -m1 "EXCEPTION halt" $logs_found | head -1 | cut -c1-300)"
+		if [ -n "$logs_found" ] && grep -q -h -e "EXCEPTION halt" -e "x360: halted" $logs_found; then
+			reason="the game halted: $(grep -h -m1 -e "EXCEPTION halt" -e "x360: halted" $logs_found | head -1 | cut -c1-300)"
 			break
 		fi
 		if [ "$marked" = 0 ]; then
@@ -221,7 +301,7 @@ phase menu "" "" "starting main menu music" 10 || status=1
 # (the map: the game's init.txt; it is in once its scripts are read, which
 # follows its tags and its structure bsp)
 phase map "map_name $map" "starting precaching of map '${map##*\\}'" "scenario scripts:" "$seconds" || status=1
-rm -rf "$data" "$game"
+rm -rf "$data" "$game" "$out/shim"
 if [ "$status" = 0 ]; then
 	echo "xenia smoke: PASS (Xenia only; not an Xbox 360)"
 else
