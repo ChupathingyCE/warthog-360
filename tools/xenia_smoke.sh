@@ -259,7 +259,7 @@ phase() {
 	if [ -n "$init" ]; then
 		printf '%s\r\n' "$init" > "$game/init.txt"
 	fi
-	rm -f "$game"/*.raw
+	rm -rf "$game"/*.raw "$game/glsl"
 	for put in "${puts[@]+"${puts[@]}"}"; do
 		cp "$put" "$game/"
 	done
@@ -299,6 +299,10 @@ phase() {
 	cp "$game/port.txt" "$game/config.toml" "$logs/" 2> /dev/null || true
 	cp "$game/debug.txt" "$logs/port-debug.txt" 2> /dev/null || true
 	mv "$game"/*.raw "$logs/" 2> /dev/null || true
+	# (shaders the console could not compile: x360_gl.c's game:\glsl)
+	if [ -d "$game/glsl" ]; then
+		mv "$game/glsl" "$logs/glsl"
+	fi
 	if [ "$result" = pass ]; then
 		echo "$name: PASS ($(( $(date +%s) - started )) s)" | tee "$logs/result.txt"
 	else
