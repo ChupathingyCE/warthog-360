@@ -20,6 +20,10 @@
 # --display   an X display to run on; without one, the test starts its own
 #             Xvfb (Xenia needs a window, and Vulkan: a GPU's, or Mesa's
 #             llvmpipe on the CPU, which is slow but enough)
+# --put       a file put in the game's folder before each boot (config.toml
+#             for settings, gl.txt for a developer-tools build's switches);
+#             may be given more than once. Pictures the game writes there
+#             (*.raw) are kept with the phase's logs
 #
 # The first boot passes when the game starts the main menu's music; the
 # second when the map has loaded and the game has run it for --seconds
@@ -45,6 +49,7 @@ map='levels\test\bloodgulch\bloodgulch'
 seconds=60
 timeout=1800
 display=${DISPLAY:-}
+puts=()
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -56,6 +61,7 @@ while [ $# -gt 0 ]; do
 		--seconds) seconds=$2; shift 2 ;;
 		--timeout) timeout=$2; shift 2 ;;
 		--display) display=$2; shift 2 ;;
+		--put) puts+=("$2"); shift 2 ;;
 		*) echo "$0: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -253,6 +259,10 @@ phase() {
 	if [ -n "$init" ]; then
 		printf '%s\r\n' "$init" > "$game/init.txt"
 	fi
+	rm -f "$game"/*.raw
+	for put in "${puts[@]+"${puts[@]}"}"; do
+		cp "$put" "$game/"
+	done
 	echo "$name: starting Xenia"
 	DISPLAY=$display XENIA_RDWR_ROOT="$out/" LD_PRELOAD="$shim" "$xenia" --gpu=vulkan --apu=nop --allow_game_relative_writes=true \
 		--storage_root="$out/xenia/storage" --content_root="$out/xenia/content" --cache_root="$out/xenia/cache" \
@@ -288,6 +298,7 @@ phase() {
 	cp "$game/logs/debug.txt" "$logs/" 2> /dev/null || true
 	cp "$game/port.txt" "$game/config.toml" "$logs/" 2> /dev/null || true
 	cp "$game/debug.txt" "$logs/port-debug.txt" 2> /dev/null || true
+	mv "$game"/*.raw "$logs/" 2> /dev/null || true
 	if [ "$result" = pass ]; then
 		echo "$name: PASS ($(( $(date +%s) - started )) s)" | tee "$logs/result.txt"
 	else
