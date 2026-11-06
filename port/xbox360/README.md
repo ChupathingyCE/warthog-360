@@ -112,13 +112,14 @@ From earlier ports built with OXDK's Xbox 360 tools, and what phase 0 is built a
 - Paths: backslashes only, and device names longer than a letter (`game:`). A forward slash fails silently on writes, and `path[1] == ':'` checks miss the device.
 - `game:` is writable when launched from Aurora; `Hdd:` and `Hdd1:` may not be mounted.
 - Exit with `XLaunchNewImage("", 0)`. Tearing Direct3D or sound down mid-present can hang the console.
-- OXDK's patched clang returns 64-bit values in a register pair where the SDK uses one register: an SDK call returning a 64-bit value (file positions, `_time64`) comes back wrong. Build with `-D_USE_32BIT_TIME_T=1`.
+- OXDK's patched clang returned 64-bit values in a register pair where the SDK uses one register, and saved r14-r31 as 32-bit words. Current OXDK matches the SDK for both, and for structures of up to 8 bytes and `char`/`short` arguments; a structure over 8 bytes passed by value to the SDK still is not (OXDK's `tools/abitest/sdkguard.py` lists any). The build still passes `-D_USE_32BIT_TIME_T=1`; dropping it is a change of its own.
 - Variadic doubles format as garbage: `%f` through the SDK's `printf` family is broken. The game's debug and HUD text use it widely.
 - `_byteswap_ushort`, `_ulong` and `_uint64` are declared by the SDK and defined nowhere: the port provides them as functions (not macros).
 - No C++ exceptions, no VMX128 (XNA math is the scalar fallback), no `vsnprintf` (`_vsnprintf`).
 - Direct3D 9 on Xenos has no fixed function and no `UpdateTexture`; textures are tiled (linear uploads use the `D3DFMT_LIN_*` formats). Shaders are compiled offline with the SDK's `fxc` under Wine (`/Zpr`, `row_major`).
-- The XEX's DOS header: cxex writes only `MZ` and the PE header's offset, and Xenia refuses an image without the header Microsoft's linker writes. `tools/xbox360_dos_header.py` writes that header and stub after each link, and updates the image's hash to match.
-- The SDK's `.XBMOVIE$` sections hold variables its libraries write (XAudio2 sets one when it makes its mastering voice). Microsoft's linker puts them in a writable section; OXDK's `title.ld` puts them in the read-only data. The build links with a copy of that script that moves them to `.data` (`tools/xbox360_linker_script.py`).
+- The XEX's DOS header: Xenia refuses an image without the header Microsoft's linker writes. OXDK's cxex writes it (older OXDKs wrote only `MZ`; the build asks for a current one).
+- The SDK's `.XBMOVIE$` sections hold variables its libraries write (XAudio2 sets one when it makes its mastering voice). Microsoft's linker puts them in a writable section, and so does OXDK's `title.ld` (older ones put them in the read-only data).
+- Bitfields: the console units build with `-mms-bitfields`, so the SDK's structures with mixed-type bitfields have the SDK's layout. The SDK's `#pragma bitfield_order` is still ignored.
 - Big-endian: every binary loader byte-swaps after its reads, and unaligned `*(int *)` reads fault; use memcpy readers. Pointer and integer type mismatches are real bugs here: don't silence them.
 
 ## Compile census

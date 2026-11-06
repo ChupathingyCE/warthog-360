@@ -81,8 +81,8 @@ BASE_FLAGS = [
     "-D_W64=",
     # SAL 2 annotations clang would read as K&R prototypes
     "'-D_Releases_lock_(x)='",
-    # the SDK's 64-bit returns come back wrong from this compiler (the
-    # register pair gap): the C runtime's 32-bit time_t
+    # the C runtime's 32-bit time_t (from when OXDK's clang returned 64-bit
+    # values in a register pair; it now returns them in r3 as the SDK does)
     "-D_USE_32BIT_TIME_T=1",
     # the C runtime headers' __inline functions are MSVC's pick-any COMDATs,
     # which an ELF target emits in every unit: each unit's own copy instead
@@ -195,6 +195,11 @@ CONSOLE_FLAGS = [
     "-Werror=int-conversion",
     "-Werror=implicit-function-declaration",
     "-Werror=format",
+    # bitfields laid out as the SDK's compiler lays them out (a new unit when
+    # the declared type changes), so the SDK's structures with mixed-type
+    # bitfields have the SDK's layout here (OXDK360_SDK_FLAGS in OXDK's
+    # xbox360.mk); the game's units keep their own
+    "-mms-bitfields",
 ]
 
 # the desktop platform layer's units the console does its own way
@@ -341,6 +346,21 @@ def configure_inputs(port: ConsolePort) -> List[Path]:
     ]
 
 
+def _oxdk360_current(oxdk360: Path) -> bool:
+    """OXDK360 has what this build used to add after the link: the DOS
+    header and stub Microsoft's linker writes (Xenia loads only an image
+    starting "MZ", 0x90, 0) and the SDK's .XBMOVIE$ in writable data (XAudio2
+    writes there)"""
+    try:
+        cxex = (oxdk360 / "tools" / "cxex" / "cxex.cpp").read_text(errors="replace")
+        title = (oxdk360 / "oxdk360" / "title.ld").read_text(errors="replace")
+    except OSError:
+        return False
+    data = title.find(".data")
+    return ("This program cannot be run in DOS mode" in cxex and
+            data >= 0 and title.find(".XBMOVIE$", data) > data)
+
+
 def _missing(n: Writer, missing: List[str]) -> None:
     """`ninja xbox360` says what is missing rather than not existing"""
     text = "; ".join(missing)
@@ -368,6 +388,9 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         missing.append("the patched clang (--llvm-xenon or LLVM_XENON_DIR)")
     if not xdk:
         missing.append("your extracted Xbox 360 SDK with lib/xbox/xboxkrnl.lib (--xdk360 or XDK_DIR)")
+    if oxdk360 and not _oxdk360_current(oxdk360):
+        missing.append("an OXDK360 whose cxex writes Microsoft's DOS stub and whose title.ld "
+                       "puts .XBMOVIE$ in .data (OXDK main after the ABI fixes: update it)")
     if not missing and not fetch_sdl_headers():
         missing.append("SDL's headers (downloaded once into build/server/third_party)")
     if missing:
@@ -380,7 +403,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     objcopy = _llvm_tool(llvm_bin, "llvm-objcopy")
     oxdklink = oxdk360 / "tools" / "oxdklink" / "oxdklink.py"
     cxex = oxdk360 / "tools" / "cxex" / "cxex"
-    oxdk360_linker_script = oxdk360 / "oxdk360" / "title.ld"
+    # OXDK360's own, which puts the SDK's writable .XBMOVIE$ data in .data
+    linker_script = oxdk360 / "oxdk360" / "title.ld"
     builtins = oxdk360 / "oxdk360" / "builtins" / "builtins.c"
 
     build_dir: Path = sln.build_dir / "xbox360"
@@ -389,9 +413,6 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     xex = build_dir / "default.xex"
     stamp = gen_dir / "xbox360_build_stamp.h"
     semantics_header = gen_dir / "halo_msvc_semantics.h"
-    # OXDK360's, with the XDK's writable .XBMOVIE$ data out of the read-only
-    # pages (tools/xbox360_linker_script.py)
-    linker_script = gen_dir / "title.ld"
     platform_semantics_header = gen_dir / "platform_msvc_semantics.h"
     prefix_header = PORT_DIR / "include" / "halo_xbox360_prefix.h"
     xdk_include = game / XDK_INCLUDE
@@ -412,17 +433,10 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         depfile="$out.d",
         deps="gcc",
     )
-    # (then the DOS header Microsoft's linker writes, which cxex leaves
-    # zero and Xenia checks: tools/xbox360_dos_header.py)
     n.rule(
         name="xbox360_xex",
-        command=f"$xbox360_link $in -o $out $ldflags && $python {_quote(TOOLS_DIR / 'xbox360_dos_header.py')} $out",
+        command="$xbox360_link $in -o $out $ldflags",
         description="XBOX360 XEX $out",
-    )
-    n.rule(
-        name="xbox360_linker_script",
-        command=f"$python {_quote(TOOLS_DIR / 'xbox360_linker_script.py')} $in $out",
-        description="XBOX360 LINKER SCRIPT $out",
     )
     n.rule(
         name="xbox360_stamp",
@@ -447,8 +461,6 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     # which build ran
     n.build(outputs="xbox360_always", rule="phony")
     n.build(outputs=stamp, rule="xbox360_stamp", implicit=["xbox360_always", TOOLS_DIR / "xbox360_stamp.py"])
-    n.build(outputs=linker_script, rule="xbox360_linker_script", inputs=oxdk360_linker_script,
-            implicit=[TOOLS_DIR / "xbox360_linker_script.py"])
 
     game_headers = port.game_headers()
     n.build(
@@ -687,7 +699,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         outputs=xex,
         rule="xbox360_xex",
         inputs=objects,
-        implicit=[linker_script, *(p for p in (cxex, oxdklink) if p.is_file()), TOOLS_DIR / "xbox360_dos_header.py"],
+        implicit=[linker_script, *(p for p in (cxex, oxdklink) if p.is_file())],
         variables={"ldflags": " ".join(ldflags_list)},
     )
     n.build(outputs="xbox360", rule="phony", inputs=xex)
