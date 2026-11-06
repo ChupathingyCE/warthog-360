@@ -43,6 +43,30 @@ the first time.
 
 #include "x360_port.h"
 #include "x360_glsl.h"
+#include "x360_frame_counters.h"
+
+/* the device calls a frame makes, counted for the log every 10 seconds
+(x360_frame_counters.h); the calls below are the SDK's inline functions */
+#define IDirect3DDevice9_SetRenderState(d, s, v) (X360_COUNT(render_states, 1), D3DDevice_SetRenderState((d), (s), (v)))
+#define IDirect3DDevice9_SetSamplerState(d, n, s, v) (X360_COUNT(sampler_states, 1), \
+	D3DDevice_SetSamplerState((d), (n), (s), (v)))
+#define IDirect3DDevice9_SetTexture(d, n, t) (X360_COUNT(textures, 1), D3DDevice_SetTexture_Inline((d), (n), (t)))
+#define IDirect3DDevice9_SetVertexShaderConstantF(d, r, p, n) (X360_COUNT(vertex_constants, (n)), \
+	D3DDevice_SetVertexShaderConstantF((d), (r), (p), (n)))
+#define IDirect3DDevice9_SetPixelShaderConstantF(d, r, p, n) (X360_COUNT(pixel_constants, (n)), \
+	D3DDevice_SetPixelShaderConstantF((d), (r), (p), (n)))
+#define IDirect3DDevice9_SetVertexShader(d, v) (X360_COUNT(shaders, 1), D3DDevice_SetVertexShader((d), (v)))
+#define IDirect3DDevice9_SetPixelShader(d, p) (X360_COUNT(shaders, 1), D3DDevice_SetPixelShader((d), (p)))
+#define IDirect3DDevice9_SetVertexDeclaration(d, v) (X360_COUNT(declarations, 1), D3DDevice_SetVertexDeclaration((d), (v)))
+#define IDirect3DDevice9_SetStreamSource(d, n, b, o, s) (X360_COUNT(streams, 1), \
+	D3DDevice_SetStreamSource_Inline((d), (n), (b), (o), (s)))
+#define IDirect3DDevice9_SetIndices(d, i) (X360_COUNT(index_buffers, 1), D3DDevice_SetIndices((d), (i)))
+#define IDirect3DDevice9_DrawVertices(d, t, s, n) (x360_count_draw(), D3DDevice_DrawVertices((d), (t), (s), (n)))
+#define IDirect3DDevice9_DrawIndexedVertices(d, t, b, s, n) (x360_count_draw(), \
+	D3DDevice_DrawIndexedVertices((d), (t), (b), (s), (n)))
+#define IDirect3DDevice9_ClearF(d, f, r, c, z, s) (X360_COUNT(clears, 1), D3DDevice_ClearF((d), (f), (r), (c), (z), (s)))
+#define IDirect3DDevice9_Resolve(d, f, r, t, p, l, s, c, z, st, pa) (X360_COUNT(resolves, 1), \
+	D3DDevice_Resolve((d), (f), (r), (t), (p), (l), (s), (c), (z), (st), (pa)))
 
 /* (d3dx9mesh.h's, which OXDK360's C stand-in for d3dx9.h leaves out with the
 mesh functions: the drive's shader cache hands its bytes over in one) */
@@ -612,6 +636,10 @@ static void *ring_reserve(unsigned char *ring, unsigned long ring_size, unsigned
 	}
 	*offset = aligned + size;
 	stats.ring_bytes += size;
+	if (ring == gl.index_ring)
+		X360_COUNT(index_bytes, size);
+	else
+		X360_COUNT(ring_bytes, size);
 	return ring + aligned;
 }
 
@@ -951,9 +979,14 @@ static void texture_upload(struct texture *texture, GLenum target, int level, un
 {
 	LARGE_INTEGER start;
 
+	unsigned long long ticks = x360_ticks();
+
 	STATS_NOW(start);
 	texture_upload_timed(texture, target, level, x, y, width, height, depth, data, format);
 	stats.texture_ms += stats_ms_since(start);
+	X360_COUNT(texture_bytes, width * height * (depth ? depth : 1) * (texture->compressed ? 1 : 4));
+	X360_COUNT(texture_uploads, 1);
+	x360_frame_counters.device_ticks += x360_ticks() - ticks;
 }
 
 static void texture_upload_timed(struct texture *texture, GLenum target, int level, unsigned long x,
@@ -1369,6 +1402,7 @@ static BOOL shader_compile(struct shader *shader)
 		if (code)
 		{
 			shader_stats.read++;
+			X360_COUNT(shaders_made, 1);
 			shader_stats.read_ms += GetTickCount() - started;
 		}
 	}
@@ -1381,6 +1415,7 @@ static BOOL shader_compile(struct shader *shader)
 		result = D3DXCompileShader(shader->hlsl, (UINT)strlen(shader->hlsl), NULL, NULL, "main",
 			vertex ? "vs_3_0" : "ps_3_0", 0, &code, &errors, &shader->constants);
 		shader_stats.compiled++;
+		X360_COUNT(shaders_made, 1);
 		shader_stats.compile_ms += GetTickCount() - started;
 		if (SUCCEEDED(result) && code && x360_shader_cache_store(key, vertex, code->lpVtbl->GetBufferPointer(code),
 			(unsigned long)code->lpVtbl->GetBufferSize(code)))
@@ -2560,9 +2595,12 @@ static void draw(GLenum mode, unsigned long first, unsigned long count, GLenum i
 {
 	LARGE_INTEGER start;
 
+	unsigned long long ticks = x360_ticks();
+
 	STATS_NOW(start);
 	draw_timed(mode, first, count, index_type, indices, base_vertex);
 	stats.draw_ms += stats_ms_since(start);
+	x360_frame_counters.device_ticks += x360_ticks() - ticks;
 }
 
 static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GLenum index_type,
@@ -4077,6 +4115,7 @@ static void APIENTRY x360_glBeginQuery(GLenum target, GLuint name)
 		return;
 	bind_targets();
 	D3DQuery_Issue(query->d3d, D3DISSUE_BEGIN);
+	X360_COUNT(queries, 1);
 	STATS_COUNT(stats.queries);
 	stats.query_ms += stats_ms_since(start);
 	query->issued = TRUE;
@@ -4124,6 +4163,7 @@ static void APIENTRY x360_glGetQueryObjectuiv(GLuint name, GLenum parameter, GLu
 		else if (parameter == GL_QUERY_RESULT)
 		{
 			STATS_COUNT(stats.query_spins);
+			X360_COUNT(query_waits, 1);
 			while (D3DQuery_GetData(query->d3d, &result, sizeof(result), D3DGETDATA_FLUSH) != S_OK)
 				;
 			query->available = TRUE;
@@ -4152,9 +4192,13 @@ void x360_gl_swap(void)
 {
 	LARGE_INTEGER start;
 
+	unsigned long long ticks = x360_ticks();
+
 	STATS_NOW(start);
 	x360_gl_swap_timed();
 	stats.present_ms += stats_ms_since(start);
+	x360_frame_counters.present_ticks += x360_ticks() - ticks;
+	x360_frame_counters_present("GL layer");
 }
 
 static void x360_gl_swap_timed(void)
