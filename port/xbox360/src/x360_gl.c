@@ -643,6 +643,46 @@ static void *ring_reserve(unsigned char *ring, unsigned long ring_size, unsigned
 	return ring + aligned;
 }
 
+/* bytes copied into a ring with aligned 32-bit stores: the rings are
+write-combined memory, which the C library's copy fills many times more
+slowly (and where a misaligned wide store faults); destination is a
+reservation's (32-byte aligned) */
+static void ring_copy(void *destination, const void *source, unsigned long size)
+{
+	unsigned long *to = destination;
+	unsigned long words = size / 4, index;
+	const unsigned char *tail;
+
+	if (!((UINT_PTR)source & 3))
+	{
+		const unsigned long *from = source;
+
+		for (index = 0; index + 4 <= words; index += 4)
+		{
+			unsigned long a = from[index], b = from[index + 1], c = from[index + 2], d = from[index + 3];
+
+			to[index] = a;
+			to[index + 1] = b;
+			to[index + 2] = c;
+			to[index + 3] = d;
+		}
+		for (; index < words; index++)
+			to[index] = from[index];
+	}
+	else
+	{
+		const unsigned char *from = source;
+
+		for (index = 0; index < words; index++, from += 4)
+			to[index] = ((unsigned long)from[0] << 24) | ((unsigned long)from[1] << 16) |
+				((unsigned long)from[2] << 8) | from[3];
+	}
+	/* (the last bytes of a size not a multiple of 4, one at a time) */
+	tail = (const unsigned char *)source + words * 4;
+	for (index = words * 4; index < size; index++)
+		((unsigned char *)destination)[index] = *tail++;
+}
+
 /* ---------- buffer storage */
 
 /* storage the GPU may still read: freed once the frame that last used it
@@ -2347,7 +2387,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 					copy = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset, bytes);
 					if (!copy)
 						return FALSE;
-					memcpy(copy, buffer->data + binding->offset, bytes);
+					ring_copy(copy, buffer->data + binding->offset, bytes);
 				}
 				if (draw_base_vertex && !deindex_indices)
 				{
@@ -2404,10 +2444,10 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 			again.in_place = FALSE;
 			if (!constants)
 			{
-				constants = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset,
-					ATTRIBUTES * 16);
-				if (!constants)
-					return FALSE;
+				/* (put together in cached memory, then copied into the ring) */
+				static float staged[ATTRIBUTES * 4];
+
+				constants = staged;
 				constant_stream = stream_count++;
 			}
 			/* (packed: only the constant attributes, one after another) */
@@ -2438,7 +2478,14 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 			word = __builtin_bswap32(word);
 			memcpy(&constants[value], &word, 4);
 		}
-		if (!debug.constant_stream)
+		if (debug.constant_stream)
+		{
+			data = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset, bytes);
+			if (!data)
+				return FALSE;
+			ring_copy(data, constants, bytes);
+		}
+		else
 		{
 			/* (every vertex its own copy, rather than one read by all) */
 			unsigned long vertex_index;
@@ -2455,7 +2502,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 			if (!data)
 				return FALSE;
 			for (vertex_index = 0; vertex_index < vertices; vertex_index++)
-				memcpy((unsigned char *)data + vertex_index * stride, constants, stride);
+				ring_copy((unsigned char *)data + vertex_index * stride, constants, stride);
 			if ((UINT_PTR)data < vertex_start * stride + 0x100000)
 			{
 				x360_log("gl: a draw's constant attributes cannot start %lu vertices back", vertex_start);
@@ -2696,7 +2743,7 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 		stats.vertices_ms += stats_ms_since(part);
 		STATS_NOW(part);
 		draw_base_vertex = 0;
-		memcpy(copy, source, count * index_bytes);
+		ring_copy(copy, source, count * index_bytes);
 		XGSetIndexBufferHeader(count * index_bytes, 0, index_bytes == 4 ? D3DFMT_INDEX32 : debug.index_le ? D3DFMT_LE_INDEX16 : D3DFMT_INDEX16, 0,
 			0, &index_headers[gl.frame_half]);
 		XGOffsetResourceAddress((D3DResource *)&index_headers[gl.frame_half], copy);
