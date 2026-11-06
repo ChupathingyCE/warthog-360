@@ -140,6 +140,19 @@ void *x360_gl_function(const char *name);
 /* the frame drawn: presented */
 void x360_gl_swap(void);
 
+/* ---------- threads (x360_posix.c)
+
+The console's six hardware threads are three cores of two. A thread made
+without a place runs on its maker's hardware thread, which for the game's
+helpers is the game's own (0), so they took turns with it. The game is on
+0 and the sound's mixer on 4 (x360_audio.c); the helpers go to 2, 3 and
+5 in turn, and the network's threads to 5. */
+#define X360_THREAD_GAME 0
+#define X360_THREAD_AUDIO 4
+#define X360_THREAD_NETWORK 5
+/* a helper's hardware thread: 2, 3 and 5 in turn */
+int x360_thread_helper_processor(void);
+
 /* ---------- leaving */
 
 void console_exit_to_launcher(void);
