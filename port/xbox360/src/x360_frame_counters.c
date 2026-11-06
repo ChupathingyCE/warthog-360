@@ -24,7 +24,7 @@ int halo_perf_render_part_now(void);
 
 static double ticks_per_ms;
 static unsigned long long period_start, last_present;
-static int render_depth;
+static int render_depth, logged_clock;
 static unsigned long long render_entered;
 
 static void frequency_read(void)
@@ -77,6 +77,9 @@ void x360_frame_counters_present(const char *renderer)
 	}
 	c->frames++;
 	c->frame_ticks += now - last_present;
+	if (c->frames == 300 && !logged_clock++)
+		x360_log("frame: the time base, %.0f ticks a millisecond; %llu ticks in 300 frames", ticks_per_ms,
+			now - period_start);
 	last_present = now;
 	if ((double)(now - period_start) < REPORT_SECONDS * 1000.0 * ticks_per_ms || !c->frames)
 		return;

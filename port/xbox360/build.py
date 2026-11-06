@@ -197,6 +197,10 @@ CONSOLE_FLAGS = [
     "-Werror=format",
 ]
 
+# the port's units that see the console's SDK though their names are not
+# x360_*: the native renderer (the game's console_renderer.h on Direct3D 9)
+CONSOLE_SDK_SOURCES = {"d3d8_x360.c"}
+
 # the desktop platform layer's units the console does its own way
 # (port/xbox360/src), or has no use for
 REPLACED_PLATFORM_SOURCES = {
@@ -269,6 +273,13 @@ def add_arguments(parser: Any) -> None:
         type=Path,
         help="your extracted Xbox 360 SDK for `ninja xbox360`, the folder holding lib/xbox/xboxkrnl.lib "
         "(default: XDK_DIR, or OXDK360's search)",
+    )
+    parser.add_argument(
+        "--x360-renderer",
+        choices=("gl", "native"),
+        default="gl",
+        help="display.renderer's default in a new config.toml for `ninja xbox360`: gl, the renderer over the OpenGL "
+        "layer, or native, the console's own (a test; either can be set in config.toml)",
     )
 
 
@@ -532,6 +543,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         version_define,
         # (Delta Peer's PROFILE carries console_profile_id: src/x360_console_link.c)
         "-DHALO_CONSOLE_PROFILE_ID",
+        # (display.renderer's default: --x360-renderer)
+        *(["-DHALO_CONSOLE_NATIVE_RENDERER_FIRST"] if getattr(sln.args, "x360_renderer", "gl") == "native" else []),
         f"-include {_quote(prefix_header)}",
         f"-include {_quote(platform_semantics_header)}",
         f"-I{_quote(game / CONSOLE_LINK_DIR)}",
@@ -625,7 +638,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     https_console_cflags = " ".join([console_cflags, f"-iquote {_quote(game / CONSOLE_DIR / 'https')}",
                                      f"-iquote {_quote(game / LINUX_DIR / 'include')}"])
     for source in sorted((PORT_DIR / "src").glob("*.c")):
-        if source.name.startswith("x360_"):
+        if source.name.startswith("x360_") or source.name in CONSOLE_SDK_SOURCES:
             add_object(source, https_console_cflags if source.name in HTTPS_CONSOLE_SOURCES else console_cflags,
                        [stamp])
         else:
