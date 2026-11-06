@@ -64,6 +64,8 @@ static void log_lock_enter(void)
 	EnterCriticalSection(&log_lock);
 }
 
+static void crash_filter_install(void);
+
 /* every line to the debug channel (XBDM's notifications) and to
 game:\port.txt, flushed: a crash keeps everything before it */
 void console_debug_print(const char *text)
@@ -104,6 +106,8 @@ void console_debug_print(const char *text)
 	{
 		port_log = CreateFileA(PORT_LOG_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
 			FILE_ATTRIBUTE_NORMAL, NULL);
+		/* (with the log's first line: a crash from here on is written to it) */
+		crash_filter_install();
 	}
 	if (port_log != INVALID_HANDLE_VALUE)
 	{
@@ -643,6 +647,97 @@ void console_log_backtrace(const char *why)
 	text[sizeof(text) - 1] = '\0';
 	log_flush_now = 1;
 	x360_log("%s; calls:%s", why, text);
+}
+
+/* ---------- a crash in the log
+
+A crash took the console back to the dashboard (or to the launcher's crash
+screen) and left nothing in the logs. XAPI's start-up runs the title under
+an exception handler that asks the filter set here first: it writes the
+exception, the registers that say where, the calls that led there (the back
+chain from the faulting frame) and the return addresses found on the stack
+to port.txt, flushed, then lets the crash go on as before. The addresses
+are the XEX's (the build's map file names them). */
+
+/* the XEX's code (default.xex is based at 0x82000000) */
+#define CRASH_CODE_LOW 0x82000000U
+#define CRASH_CODE_HIGH 0x84400000U
+
+static int crash_code_address(unsigned int address)
+{
+	return address >= CRASH_CODE_LOW && address < CRASH_CODE_HIGH;
+}
+
+static LONG WINAPI crash_filter(struct _EXCEPTION_POINTERS *information)
+{
+	static volatile LONG entered;
+	EXCEPTION_RECORD *record = information ? information->ExceptionRecord : NULL;
+	CONTEXT *context = information ? information->ContextRecord : NULL;
+	MEMORYSTATUS status;
+	char text[40 * 11 + 1];
+	size_t length = 0;
+	unsigned int *stack, *scan;
+	int count;
+
+	if (InterlockedExchange(&entered, 1) || !record || !context)
+		return EXCEPTION_CONTINUE_SEARCH;
+	log_flush_now = 1;
+	if (record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2)
+		x360_log("crashed: exception %08lx at %08lx, %s address %08lx", (unsigned long)record->ExceptionCode,
+			(unsigned long)(UINT_PTR)record->ExceptionAddress, record->ExceptionInformation[0] ? "writing" : "reading",
+			(unsigned long)record->ExceptionInformation[1]);
+	else
+		x360_log("crashed: exception %08lx at %08lx", (unsigned long)record->ExceptionCode,
+			(unsigned long)(UINT_PTR)record->ExceptionAddress);
+	x360_log("crashed: iar %08lx lr %08lx ctr %08lx sp %08lx r3 %08lx r4 %08lx r5 %08lx r31 %08lx",
+		(unsigned long)context->Iar, (unsigned long)context->Lr, (unsigned long)context->Ctr,
+		(unsigned long)context->Gpr1, (unsigned long)context->Gpr3, (unsigned long)context->Gpr4,
+		(unsigned long)context->Gpr5, (unsigned long)context->Gpr31);
+	/* the back chain from the faulting frame, as backtrace() walks it */
+	text[0] = '\0';
+	stack = (unsigned int *)(UINT_PTR)(unsigned int)context->Gpr1;
+	for (count = 0; count < 24 && stack; count++)
+	{
+		unsigned int *caller = (unsigned int *)(UINT_PTR)stack[0];
+		unsigned int address;
+
+		if (!caller || caller <= stack || (UINT_PTR)caller - (UINT_PTR)stack > 0x100000)
+			break;
+		address = caller[-2];
+		if (crash_code_address(address))
+			length += (size_t)_snprintf(text + length, sizeof(text) - length - 1, " %08x", address);
+		stack = caller;
+		if (length >= sizeof(text) - 12)
+			break;
+	}
+	text[sizeof(text) - 1] = '\0';
+	x360_log("crashed: calls:%s", text);
+	/* every word on the stack that looks like a return address (when the
+	back chain is broken) */
+	length = 0;
+	text[0] = '\0';
+	scan = (unsigned int *)(UINT_PTR)(unsigned int)context->Gpr1;
+	for (count = 0; count < 2048 && length < sizeof(text) - 12; count++)
+	{
+		if (crash_code_address(scan[count]))
+			length += (size_t)_snprintf(text + length, sizeof(text) - length - 1, " %08x", scan[count]);
+	}
+	text[sizeof(text) - 1] = '\0';
+	x360_log("crashed: on the stack:%s", text);
+	GlobalMemoryStatus(&status);
+	x360_log("crashed: %u MB of %u MB free; halted", (unsigned int)(status.dwAvailPhys >> 20),
+		(unsigned int)(status.dwTotalPhys >> 20));
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void crash_filter_install(void)
+{
+	static int installed;
+
+	if (installed)
+		return;
+	installed = 1;
+	SetUnhandledExceptionFilter(crash_filter);
 }
 
 /* the environment: the console has none, so settings that the desktop
