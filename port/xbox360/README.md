@@ -26,7 +26,7 @@ How it is put together:
 The game draws with one of two renderers, chosen by `display.renderer` in `game:\config.toml` when the game starts:
 
 - `"gl"`, the default: the desktop renderer (the game's `port/linux/src/d3d8_gl.c`) over the OpenGL layer of `src/x360_gl.c`, whose GLSL `src/x360_glsl.c` turns into HLSL.
-- `"native"`, a test: the game's Direct3D 8 device handed to the console's Direct3D 9 directly, without the OpenGL layer (the game's `port/linux/src/d3d8_console.inl` over its `console_renderer.h`, defined here by `src/d3d8_x360.c`). Textures are made once in the GPU's tiled layout, shaders are compiled once and kept in `game:\shaders`, state and constants are set only when they change, the map's vertices and indices are read where they are, and occlusion queries are never waited for. If it cannot start, the game draws with `"gl"`.
+- `"native"`, a test: the game's Direct3D 8 device handed to the console's Direct3D 9 directly, without the OpenGL layer (the game's `port/linux/src/d3d8_console.inl` over its `console_renderer.h`, defined here by `src/d3d8_x360.c`). Textures are made once (in the GPU's tiled layout with `console.native_tiled_textures = true`, a test), shaders are compiled once and kept in `game:\shaders`, state and constants are set only when they change, the map's vertices and indices are read where they are, and occlusion queries are never waited for. If it cannot start, the game draws with `"gl"`.
 
 `configure.py --x360-renderer native` makes `"native"` the default of a new `config.toml`. Either renderer can be set in the file afterwards.
 

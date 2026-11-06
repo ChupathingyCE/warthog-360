@@ -13,10 +13,12 @@ that calls Direct3D 9. Another layer (the GPU's own registers, say) could
 take its place under the same calls.
 
 How the Xbox's model meets the console's:
-- Textures are made once in the console's own tiled layout (XGTileTextureLevel)
-  from the texels the game side decodes, ARGB words in the processor's order
-  (D3DFMT_A8R8G8B8), or DXT blocks as the maps have them, little-endian
-  (D3DFMT_LE_DXT*). Nothing keeps a copy of them in the processor's memory.
+- Textures are made once from the texels the game side decodes, ARGB words
+  in the processor's order (D3DFMT_A8R8G8B8), or DXT blocks as the maps have
+  them, little-endian (D3DFMT_LE_DXT*): linear, as the GL layer makes them,
+  or in the GPU's tiled layout (XGTileTextureLevel) with
+  console.native_tiled_textures, a test. Nothing keeps a copy of them in the
+  processor's memory.
 - Render targets have EDRAM of their own, handed out once, and a texture
   each that a resolve copies their pixels into when a draw samples them.
 - Shaders come as the game's GLSL, are turned into HLSL (x360_glsl.c),
@@ -370,15 +372,44 @@ int console_renderer_initialize(void)
 
 /* ---------- textures */
 
+/* (the game's settings: port_config.c) */
+int config_boolean(const char *name);
+
+/* console.native_tiled_textures: textures in the GPU's tiled layout
+(XGTileTextureLevel), which it samples faster, or linear ones as the GL
+layer makes them. Tiled is off by default for now: in Xenia the tiled
+textures' colors differ from the linear ones' (Blood Gulch's ground and
+cliffs), which matches the GL layer; a test on hardware decides. */
+static BOOL textures_tiled(void)
+{
+	static int tiled = -1;
+
+	if (tiled < 0)
+		tiled = config_boolean("console.native_tiled_textures") ? 1 : 0;
+	return tiled;
+}
+
 static D3DFORMAT texture_format(int format)
 {
+	BOOL tiled = textures_tiled();
+
 	switch (format)
 	{
-	case _console_format_dxt1: return (D3DFORMAT)MAKELEFMT(D3DFMT_DXT1);
-	case _console_format_dxt3: return (D3DFORMAT)MAKELEFMT(D3DFMT_DXT2);
-	case _console_format_dxt5: return (D3DFORMAT)MAKELEFMT(D3DFMT_DXT4);
-	default: return D3DFMT_A8R8G8B8;
+	case _console_format_dxt1: return (D3DFORMAT)MAKELEFMT(tiled ? D3DFMT_DXT1 : D3DFMT_LIN_DXT1);
+	case _console_format_dxt3: return (D3DFORMAT)MAKELEFMT(tiled ? D3DFMT_DXT2 : D3DFMT_LIN_DXT2);
+	case _console_format_dxt5: return (D3DFORMAT)MAKELEFMT(tiled ? D3DFMT_DXT4 : D3DFMT_LIN_DXT4);
+	default: return tiled ? D3DFMT_A8R8G8B8 : D3DFMT_LIN_A8R8G8B8;
 	}
+}
+
+/* a level's rows into a locked linear texture, at its pitch */
+static void rows_copy(unsigned char *destination, unsigned long pitch, const void *source, unsigned long row_bytes,
+	unsigned long rows)
+{
+	unsigned long row;
+
+	for (row = 0; row < rows; row++)
+		memcpy(destination + row * pitch, (const unsigned char *)source + row * row_bytes, row_bytes);
 }
 
 struct console_texture *console_texture_create(int kind, int format, unsigned long width, unsigned long height,
@@ -444,8 +475,15 @@ void console_texture_level(struct console_texture *texture, unsigned long face, 
 
 		if (SUCCEEDED(IDirect3DVolumeTexture9_LockBox((D3DVolumeTexture *)texture->d3d, (UINT)level, &box, NULL, 0)))
 		{
-			XGTileVolumeTextureLevel(texture->width, texture->height, texture->depth, (UINT)level, gpu_format, 0,
-				box.pBits, NULL, data, row_pitch, row_pitch * (compressed ? (height + 3) / 4 : height), NULL);
+			unsigned long rows = compressed ? (height + 3) / 4 : height, slice;
+
+			if (textures_tiled())
+				XGTileVolumeTextureLevel(texture->width, texture->height, texture->depth, (UINT)level, gpu_format, 0,
+					box.pBits, NULL, data, row_pitch, row_pitch * rows, NULL);
+			else
+				for (slice = 0; slice < depth; slice++)
+					rows_copy((unsigned char *)box.pBits + slice * box.SlicePitch, box.RowPitch,
+						(const unsigned char *)data + slice * row_pitch * rows, row_pitch, rows);
 			IDirect3DVolumeTexture9_UnlockBox((D3DVolumeTexture *)texture->d3d, (UINT)level);
 		}
 	}
@@ -459,8 +497,11 @@ void console_texture_level(struct console_texture *texture, unsigned long face, 
 
 		if (SUCCEEDED(result))
 		{
-			XGTileTextureLevel(texture->width, texture->height, (UINT)level, gpu_format, 0, locked.pBits, NULL, data,
-				row_pitch, NULL);
+			if (textures_tiled())
+				XGTileTextureLevel(texture->width, texture->height, (UINT)level, gpu_format, 0, locked.pBits, NULL, data,
+					row_pitch, NULL);
+			else
+				rows_copy(locked.pBits, locked.Pitch, data, row_pitch, compressed ? (height + 3) / 4 : height);
 			if (texture->kind == _console_texture_cube)
 				IDirect3DCubeTexture9_UnlockRect((D3DCubeTexture *)texture->d3d, (D3DCUBEMAP_FACES)face, (UINT)level);
 			else
