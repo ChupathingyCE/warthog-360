@@ -16,10 +16,18 @@
 # --map       the map the second boot loads (default
 #             levels\test\bloodgulch\bloodgulch)
 # --seconds   how long the map runs once it is loaded (default 60)
+# --menu-seconds how long the menu runs once its music starts (default 10)
+# --xenia-arg an option for Xenia, given more than once for more
+#             (--readback_resolve=full lets the game read back the pictures
+#             its GPU resolves, for console.picture_frame's pictures)
 # --timeout   the longest a phase may take to reach its mark (default 1800)
 # --display   an X display to run on; without one, the test starts its own
 #             Xvfb (Xenia needs a window, and Vulkan: a GPU's, or Mesa's
 #             llvmpipe on the CPU, which is slow but enough)
+# --put       a file put in the game's folder before each boot (config.toml
+#             for settings, gl.txt for a developer-tools build's switches);
+#             may be given more than once. Pictures the game writes there
+#             (*.raw) are kept with the phase's logs
 #
 # The first boot passes when the game starts the main menu's music; the
 # second when the map has loaded and the game has run it for --seconds
@@ -43,8 +51,11 @@ out=
 maps_root="$HOME/halo-maps/new-data-root.sh"
 map='levels\test\bloodgulch\bloodgulch'
 seconds=60
+menu_seconds=10
 timeout=1800
 display=${DISPLAY:-}
+puts=()
+xenia_args=()
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -54,8 +65,11 @@ while [ $# -gt 0 ]; do
 		--maps-root) maps_root=$2; shift 2 ;;
 		--map) map=$2; shift 2 ;;
 		--seconds) seconds=$2; shift 2 ;;
+		--menu-seconds) menu_seconds=$2; shift 2 ;;
 		--timeout) timeout=$2; shift 2 ;;
 		--display) display=$2; shift 2 ;;
+		--put) puts+=("$2"); shift 2 ;;
+		--xenia-arg) xenia_args+=("$2"); shift 2 ;;
 		*) echo "$0: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -253,10 +267,14 @@ phase() {
 	if [ -n "$init" ]; then
 		printf '%s\r\n' "$init" > "$game/init.txt"
 	fi
+	rm -rf "$game"/*.raw "$game/glsl"
+	for put in "${puts[@]+"${puts[@]}"}"; do
+		cp "$put" "$game/"
+	done
 	echo "$name: starting Xenia"
 	DISPLAY=$display XENIA_RDWR_ROOT="$out/" LD_PRELOAD="$shim" "$xenia" --gpu=vulkan --apu=nop --allow_game_relative_writes=true \
 		--storage_root="$out/xenia/storage" --content_root="$out/xenia/content" --cache_root="$out/xenia/cache" \
-		--log_file="$logs/xenia.log" "$game/default.xex" > "$logs/xenia.out" 2>&1 &
+		--log_file="$logs/xenia.log" "${xenia_args[@]+"${xenia_args[@]}"}" "$game/default.xex" > "$logs/xenia.out" 2>&1 &
 	xenia_pid=$!
 	started=$(date +%s)
 	while :; do
@@ -288,6 +306,16 @@ phase() {
 	cp "$game/logs/debug.txt" "$logs/" 2> /dev/null || true
 	cp "$game/port.txt" "$game/config.toml" "$logs/" 2> /dev/null || true
 	cp "$game/debug.txt" "$logs/port-debug.txt" 2> /dev/null || true
+	mv "$game"/*.raw "$logs/" 2> /dev/null || true
+	# (the shaders the console compiled, game:\shaders: a cache to ship)
+	if [ -d "$game/shaders" ]; then
+		rm -rf "$logs/shaders"
+		cp -r "$game/shaders" "$logs/shaders"
+	fi
+	# (shaders the console could not compile: x360_gl.c's game:\glsl)
+	if [ -d "$game/glsl" ]; then
+		mv "$game/glsl" "$logs/glsl"
+	fi
 	if [ "$result" = pass ]; then
 		echo "$name: PASS ($(( $(date +%s) - started )) s)" | tee "$logs/result.txt"
 	else
@@ -297,7 +325,7 @@ phase() {
 }
 
 status=0
-phase menu "" "" "starting main menu music" 10 || status=1
+phase menu "" "" "starting main menu music" "$menu_seconds" || status=1
 # (the map: the game's init.txt; it is in once its scripts are read, which
 # follows its tags and its structure bsp)
 phase map "map_name $map" "starting precaching of map '${map##*\\}'" "scenario scripts:" "$seconds" || status=1

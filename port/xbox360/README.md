@@ -23,6 +23,17 @@ How it is put together:
 - `src/xbox360_platform.c` and `src/xbox360_input.c` stand in for `sdl_platform.c` and `xinput_sdl.c`, as the dedicated server's units do; the controllers are the console's (`src/x360_input_pad.c`).
 - The shared code's hooks are the game's console capabilities, turned on from `HALO_XBOX360_CONSOLE` (the game's `port/linux/include/halo_console_features.h`): the debug channel (`console_debug_print`), halts back to the launcher (`console_exit_to_launcher`), the GL layer (`console_gl_buffer_alias`), the Xbox's texture cache and draw limits, no write watch, and the bring-up logs with the developer tools. The maps are byte-swapped as they load by the game's `port/console/game` (`HALO_BIG_ENDIAN`).
 
+## Renderers
+
+The game draws with one of two renderers, chosen by `display.renderer` in `game:\config.toml` when the game starts:
+
+- `"gl"`, the default: the desktop renderer (the game's `port/linux/src/d3d8_gl.c`) over the OpenGL layer of `src/x360_gl.c`, whose GLSL `src/x360_glsl.c` turns into HLSL.
+- `"native"`, a test: the game's Direct3D 8 device handed to the console's Direct3D 9 directly, without the OpenGL layer (the game's `port/linux/src/d3d8_console.inl` over its `console_renderer.h`, defined here by `src/d3d8_x360.c`). Textures are made once (in the GPU's tiled layout with `console.native_tiled_textures = true`, a test), shaders are compiled once and kept in `game:\shaders`, state and constants are set only when they change, the map's vertices and indices are read where they are, and occlusion queries are never waited for. If it cannot start, the game draws with `"gl"`.
+
+`configure.py --x360-renderer native` makes `"native"` the default of a new `config.toml`. Either renderer can be set in the file afterwards.
+
+Every build logs a frame's counts and times every 10 seconds (`src/x360_frame_counters.c`): the frame rate, the time in the game, the renderer and the present, the free memory, and what a frame sets on the device and copies for the GPU.
+
 ## Requirements
 
 - [OXDK](https://github.com/MrMilenko/OXDK)'s Xbox 360 tools, its `xbox360` folder: `~/OXDK/xbox360` (`--oxdk360 DIR`; an old OXDK360 checkout in `~/OXDK360` is found too), with `tools/cxex` built.

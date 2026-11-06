@@ -43,6 +43,30 @@ the first time.
 
 #include "x360_port.h"
 #include "x360_glsl.h"
+#include "x360_frame_counters.h"
+
+/* the device calls a frame makes, counted for the log every 10 seconds
+(x360_frame_counters.h); the calls below are the SDK's inline functions */
+#define IDirect3DDevice9_SetRenderState(d, s, v) (X360_COUNT(render_states, 1), D3DDevice_SetRenderState((d), (s), (v)))
+#define IDirect3DDevice9_SetSamplerState(d, n, s, v) (X360_COUNT(sampler_states, 1), \
+	D3DDevice_SetSamplerState((d), (n), (s), (v)))
+#define IDirect3DDevice9_SetTexture(d, n, t) (X360_COUNT(textures, 1), D3DDevice_SetTexture_Inline((d), (n), (t)))
+#define IDirect3DDevice9_SetVertexShaderConstantF(d, r, p, n) (X360_COUNT(vertex_constants, (n)), \
+	D3DDevice_SetVertexShaderConstantF((d), (r), (p), (n)))
+#define IDirect3DDevice9_SetPixelShaderConstantF(d, r, p, n) (X360_COUNT(pixel_constants, (n)), \
+	D3DDevice_SetPixelShaderConstantF((d), (r), (p), (n)))
+#define IDirect3DDevice9_SetVertexShader(d, v) (X360_COUNT(shaders, 1), D3DDevice_SetVertexShader((d), (v)))
+#define IDirect3DDevice9_SetPixelShader(d, p) (X360_COUNT(shaders, 1), D3DDevice_SetPixelShader((d), (p)))
+#define IDirect3DDevice9_SetVertexDeclaration(d, v) (X360_COUNT(declarations, 1), D3DDevice_SetVertexDeclaration((d), (v)))
+#define IDirect3DDevice9_SetStreamSource(d, n, b, o, s) (X360_COUNT(streams, 1), \
+	D3DDevice_SetStreamSource_Inline((d), (n), (b), (o), (s)))
+#define IDirect3DDevice9_SetIndices(d, i) (X360_COUNT(index_buffers, 1), D3DDevice_SetIndices((d), (i)))
+#define IDirect3DDevice9_DrawVertices(d, t, s, n) (x360_count_draw(), D3DDevice_DrawVertices((d), (t), (s), (n)))
+#define IDirect3DDevice9_DrawIndexedVertices(d, t, b, s, n) (x360_count_draw(), \
+	D3DDevice_DrawIndexedVertices((d), (t), (b), (s), (n)))
+#define IDirect3DDevice9_ClearF(d, f, r, c, z, s) (X360_COUNT(clears, 1), D3DDevice_ClearF((d), (f), (r), (c), (z), (s)))
+#define IDirect3DDevice9_Resolve(d, f, r, t, p, l, s, c, z, st, pa) (X360_COUNT(resolves, 1), \
+	D3DDevice_Resolve((d), (f), (r), (t), (p), (l), (s), (c), (z), (st), (pa)))
 
 /* (d3dx9mesh.h's, which OXDK360's C stand-in for d3dx9.h leaves out with the
 mesh functions: the drive's shader cache hands its bytes over in one) */
@@ -612,7 +636,51 @@ static void *ring_reserve(unsigned char *ring, unsigned long ring_size, unsigned
 	}
 	*offset = aligned + size;
 	stats.ring_bytes += size;
+	if (ring == gl.index_ring)
+		X360_COUNT(index_bytes, size);
+	else
+		X360_COUNT(ring_bytes, size);
 	return ring + aligned;
+}
+
+/* bytes copied into a ring with aligned 32-bit stores: the rings are
+write-combined memory, which the C library's copy fills many times more
+slowly (and where a misaligned wide store faults); destination is a
+reservation's (32-byte aligned) */
+static void ring_copy(void *destination, const void *source, unsigned long size)
+{
+	unsigned long *to = destination;
+	unsigned long words = size / 4, index;
+	const unsigned char *tail;
+
+	if (!((UINT_PTR)source & 3))
+	{
+		const unsigned long *from = source;
+
+		for (index = 0; index + 4 <= words; index += 4)
+		{
+			unsigned long a = from[index], b = from[index + 1], c = from[index + 2], d = from[index + 3];
+
+			to[index] = a;
+			to[index + 1] = b;
+			to[index + 2] = c;
+			to[index + 3] = d;
+		}
+		for (; index < words; index++)
+			to[index] = from[index];
+	}
+	else
+	{
+		const unsigned char *from = source;
+
+		for (index = 0; index < words; index++, from += 4)
+			to[index] = ((unsigned long)from[0] << 24) | ((unsigned long)from[1] << 16) |
+				((unsigned long)from[2] << 8) | from[3];
+	}
+	/* (the last bytes of a size not a multiple of 4, one at a time) */
+	tail = (const unsigned char *)source + words * 4;
+	for (index = words * 4; index < size; index++)
+		((unsigned char *)destination)[index] = *tail++;
 }
 
 /* ---------- buffer storage */
@@ -951,9 +1019,14 @@ static void texture_upload(struct texture *texture, GLenum target, int level, un
 {
 	LARGE_INTEGER start;
 
+	unsigned long long ticks = x360_ticks();
+
 	STATS_NOW(start);
 	texture_upload_timed(texture, target, level, x, y, width, height, depth, data, format);
 	stats.texture_ms += stats_ms_since(start);
+	X360_COUNT(texture_bytes, width * height * (depth ? depth : 1) * (texture->compressed ? 1 : 4));
+	X360_COUNT(texture_uploads, 1);
+	x360_frame_counters.device_ticks += x360_ticks() - ticks;
 }
 
 static void texture_upload_timed(struct texture *texture, GLenum target, int level, unsigned long x,
@@ -1369,6 +1442,7 @@ static BOOL shader_compile(struct shader *shader)
 		if (code)
 		{
 			shader_stats.read++;
+			X360_COUNT(shaders_made, 1);
 			shader_stats.read_ms += GetTickCount() - started;
 		}
 	}
@@ -1381,6 +1455,7 @@ static BOOL shader_compile(struct shader *shader)
 		result = D3DXCompileShader(shader->hlsl, (UINT)strlen(shader->hlsl), NULL, NULL, "main",
 			vertex ? "vs_3_0" : "ps_3_0", 0, &code, &errors, &shader->constants);
 		shader_stats.compiled++;
+		X360_COUNT(shaders_made, 1);
 		shader_stats.compile_ms += GetTickCount() - started;
 		if (SUCCEEDED(result) && code && x360_shader_cache_store(key, vertex, code->lpVtbl->GetBufferPointer(code),
 			(unsigned long)code->lpVtbl->GetBufferSize(code)))
@@ -2312,7 +2387,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 					copy = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset, bytes);
 					if (!copy)
 						return FALSE;
-					memcpy(copy, buffer->data + binding->offset, bytes);
+					ring_copy(copy, buffer->data + binding->offset, bytes);
 				}
 				if (draw_base_vertex && !deindex_indices)
 				{
@@ -2369,10 +2444,10 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 			again.in_place = FALSE;
 			if (!constants)
 			{
-				constants = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset,
-					ATTRIBUTES * 16);
-				if (!constants)
-					return FALSE;
+				/* (put together in cached memory, then copied into the ring) */
+				static float staged[ATTRIBUTES * 4];
+
+				constants = staged;
 				constant_stream = stream_count++;
 			}
 			/* (packed: only the constant attributes, one after another) */
@@ -2403,7 +2478,14 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 			word = __builtin_bswap32(word);
 			memcpy(&constants[value], &word, 4);
 		}
-		if (!debug.constant_stream)
+		if (debug.constant_stream)
+		{
+			data = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset, bytes);
+			if (!data)
+				return FALSE;
+			ring_copy(data, constants, bytes);
+		}
+		else
 		{
 			/* (every vertex its own copy, rather than one read by all) */
 			unsigned long vertex_index;
@@ -2420,7 +2502,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 			if (!data)
 				return FALSE;
 			for (vertex_index = 0; vertex_index < vertices; vertex_index++)
-				memcpy((unsigned char *)data + vertex_index * stride, constants, stride);
+				ring_copy((unsigned char *)data + vertex_index * stride, constants, stride);
 			if ((UINT_PTR)data < vertex_start * stride + 0x100000)
 			{
 				x360_log("gl: a draw's constant attributes cannot start %lu vertices back", vertex_start);
@@ -2560,9 +2642,12 @@ static void draw(GLenum mode, unsigned long first, unsigned long count, GLenum i
 {
 	LARGE_INTEGER start;
 
+	unsigned long long ticks = x360_ticks();
+
 	STATS_NOW(start);
 	draw_timed(mode, first, count, index_type, indices, base_vertex);
 	stats.draw_ms += stats_ms_since(start);
+	x360_frame_counters.device_ticks += x360_ticks() - ticks;
 }
 
 static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GLenum index_type,
@@ -2658,7 +2743,7 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 		stats.vertices_ms += stats_ms_since(part);
 		STATS_NOW(part);
 		draw_base_vertex = 0;
-		memcpy(copy, source, count * index_bytes);
+		ring_copy(copy, source, count * index_bytes);
 		XGSetIndexBufferHeader(count * index_bytes, 0, index_bytes == 4 ? D3DFMT_INDEX32 : debug.index_le ? D3DFMT_LE_INDEX16 : D3DFMT_INDEX16, 0,
 			0, &index_headers[gl.frame_half]);
 		XGOffsetResourceAddress((D3DResource *)&index_headers[gl.frame_half], copy);
@@ -4077,6 +4162,7 @@ static void APIENTRY x360_glBeginQuery(GLenum target, GLuint name)
 		return;
 	bind_targets();
 	D3DQuery_Issue(query->d3d, D3DISSUE_BEGIN);
+	X360_COUNT(queries, 1);
 	STATS_COUNT(stats.queries);
 	stats.query_ms += stats_ms_since(start);
 	query->issued = TRUE;
@@ -4124,6 +4210,7 @@ static void APIENTRY x360_glGetQueryObjectuiv(GLuint name, GLenum parameter, GLu
 		else if (parameter == GL_QUERY_RESULT)
 		{
 			STATS_COUNT(stats.query_spins);
+			X360_COUNT(query_waits, 1);
 			while (D3DQuery_GetData(query->d3d, &result, sizeof(result), D3DGETDATA_FLUSH) != S_OK)
 				;
 			query->available = TRUE;
@@ -4152,13 +4239,24 @@ void x360_gl_swap(void)
 {
 	LARGE_INTEGER start;
 
+	unsigned long long ticks = x360_ticks();
+
 	STATS_NOW(start);
 	x360_gl_swap_timed();
 	stats.present_ms += stats_ms_since(start);
+	x360_frame_counters.present_ticks += x360_ticks() - ticks;
+	x360_frame_counters_present("GL layer");
 }
+
+/* (the game's settings: port_config.c) */
+long config_integer(const char *name);
 
 static void x360_gl_swap_timed(void)
 {
+	/* console.picture_frame: the pictures for comparing the renderers
+	(d3d8_x360.c writes the same) */
+	static long picture_frame = -1;
+
 	again.valid = FALSE;
 	if (!gl_ready())
 		return;
@@ -4196,7 +4294,11 @@ static void x360_gl_swap_timed(void)
 			"others %lu", gl.presented->width, gl.presented->height, colors[0], counts[0], colors[1], counts[1],
 			colors[2], counts[2], colors[3], counts[3], colors[4], counts[4], colors[5], counts[5], others);
 	}
-	if (debug.dump && gl.presented && gl.presented->d3d && (gl.frame == 300 || gl.frame == 900 || gl.frame == debug.dump_at))
+	if (picture_frame < 0)
+		picture_frame = config_integer("console.picture_frame");
+	if (gl.presented && gl.presented->d3d && ((debug.dump && (gl.frame == 300 || gl.frame == 900 ||
+		gl.frame == debug.dump_at)) || (picture_frame > 0 && (gl.frame == (unsigned long)picture_frame ||
+		gl.frame == (unsigned long)picture_frame * 3))))
 	{
 		/* the game's picture, untiled, to game:\picture<n>.raw (BGRA rows) */
 		D3DLOCKED_RECT locked;

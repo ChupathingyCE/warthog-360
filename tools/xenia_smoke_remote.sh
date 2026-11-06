@@ -19,7 +19,10 @@
 # --logs      where the logs come back to here (default
 #             build/xbox360/xenia-smoke; replaced on each run)
 # --keep      leave the folder on the host
-# Anything else goes to xenia_smoke.sh (--map, --seconds, --timeout).
+# --put       a file here put in the game's folder there (config.toml,
+#             gl.txt); may be given more than once
+# Anything else goes to xenia_smoke.sh (--map, --seconds, --menu-seconds,
+# --timeout, --xenia-arg).
 #
 # Paths on the host may start with ~/, which the host expands.
 set -euo pipefail
@@ -32,6 +35,7 @@ xex=build/xbox360/default.xex
 logs=build/xbox360/xenia-smoke
 keep=0
 pass=()
+puts=()
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -41,7 +45,8 @@ while [ $# -gt 0 ]; do
 		--xex) xex=$2; shift 2 ;;
 		--logs) logs=$2; shift 2 ;;
 		--keep) keep=1; shift ;;
-		--map|--seconds|--timeout) pass+=("$1" "$2"); shift 2 ;;
+		--put) puts+=("$2"); shift 2 ;;
+		--map|--seconds|--menu-seconds|--timeout|--xenia-arg) pass+=("$1" "$2"); shift 2 ;;
 		*) echo "$0: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -81,12 +86,20 @@ cleanup() {
 trap cleanup EXIT
 
 echo "copying the build to $host"
-scp -q -o BatchMode=yes "$xex" tools/xenia_smoke.sh "$host:$work/"
+scp -q -o BatchMode=yes "$xex" "$host:$work/default.xex"
+scp -q -o BatchMode=yes tools/xenia_smoke.sh "$host:$work/"
+if [ ${#puts[@]} -gt 0 ]; then
+	ssh_host "mkdir -p $(printf '%q' "$work/put")"
+	scp -q -o BatchMode=yes "${puts[@]}" "$host:$work/put/"
+fi
 
 args="--xenia $(remote_path "$xenia") --maps-root $(remote_path "$maps_root")"
 args+=" --xex $(printf '%q' "$work/default.xex") --out $(printf '%q' "$work/out")"
 for a in "${pass[@]+"${pass[@]}"}"; do
 	args+=" $(printf '%q' "$a")"
+done
+for put in "${puts[@]+"${puts[@]}"}"; do
+	args+=" --put $(printf '%q' "$work/put/$(basename "$put")")"
 done
 status=0
 ssh_host "bash $(printf '%q' "$work/xenia_smoke.sh") $args" || status=$?
