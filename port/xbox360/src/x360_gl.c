@@ -4248,8 +4248,15 @@ void x360_gl_swap(void)
 	x360_frame_counters_present("GL layer");
 }
 
+/* (the game's settings: port_config.c) */
+long config_integer(const char *name);
+
 static void x360_gl_swap_timed(void)
 {
+	/* console.picture_frame: the pictures for comparing the renderers
+	(d3d8_x360.c writes the same) */
+	static long picture_frame = -1;
+
 	again.valid = FALSE;
 	if (!gl_ready())
 		return;
@@ -4287,7 +4294,11 @@ static void x360_gl_swap_timed(void)
 			"others %lu", gl.presented->width, gl.presented->height, colors[0], counts[0], colors[1], counts[1],
 			colors[2], counts[2], colors[3], counts[3], colors[4], counts[4], colors[5], counts[5], others);
 	}
-	if (debug.dump && gl.presented && gl.presented->d3d && (gl.frame == 300 || gl.frame == 900 || gl.frame == debug.dump_at))
+	if (picture_frame < 0)
+		picture_frame = config_integer("console.picture_frame");
+	if (gl.presented && gl.presented->d3d && ((debug.dump && (gl.frame == 300 || gl.frame == 900 ||
+		gl.frame == debug.dump_at)) || (picture_frame > 0 && (gl.frame == (unsigned long)picture_frame ||
+		gl.frame == (unsigned long)picture_frame * 3))))
 	{
 		/* the game's picture, untiled, to game:\picture<n>.raw (BGRA rows) */
 		D3DLOCKED_RECT locked;

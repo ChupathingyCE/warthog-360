@@ -1411,34 +1411,25 @@ static void frame_next(void)
 	x.ring_offset = (unsigned long)x.half * (RING_SIZE / 2);
 }
 
-/* Developer tools (--console-debug-tools): the picture of frames 300 and
-900, and of frame N with dump_at=N in game:\gl.txt (x360_gl.c's switch),
-to game:\picture<n>.raw (1280x720, untiled ARGB words), for comparing the
-two renderers. A normal build has none of it. */
+/* (the game's settings: port_config.c) */
+long config_integer(const char *name);
+
+/* console.picture_frame = N (off by default): the picture of frames N and
+3N to game:\\picture<n>.raw (untiled ARGB words), for comparing the two
+renderers (x360_gl.c writes the same) */
 static void picture_dump(struct console_target *picture)
 {
-#ifdef HALO_CONSOLE_DEBUG_TOOLS
-	static int loaded;
-	static unsigned long dump_at;
+	static long frame = -1;
 	D3DLOCKED_RECT locked;
 	unsigned long size;
 	unsigned char *linear;
 	char path[64];
 	FILE *file;
 
-	if (!loaded)
-	{
-		char word[64];
-
-		loaded = 1;
-		if ((file = fopen("game:\\gl.txt", "rb")) != NULL)
-		{
-			while (fscanf(file, "%63s", word) == 1)
-				sscanf(word, "dump_at=%lu", &dump_at);
-			fclose(file);
-		}
-	}
-	if (!picture || !picture->texture.d3d || (x.frame != 300 && x.frame != 900 && x.frame != dump_at))
+	if (frame < 0)
+		frame = config_integer("console.picture_frame");
+	if (frame <= 0 || !picture || !picture->texture.d3d ||
+		(x.frame != (unsigned long)frame && x.frame != (unsigned long)frame * 3))
 		return;
 	size = picture->width * picture->height * 4;
 	linear = malloc(size);
@@ -1457,9 +1448,6 @@ static void picture_dump(struct console_target *picture)
 		x360_log("native: the picture (%lux%lu) written to %s", picture->width, picture->height, path);
 	}
 	free(linear);
-#else
-	(void)picture;
-#endif
 }
 
 void console_present(struct console_target *picture)
