@@ -16,6 +16,7 @@
 # --map       the map the second boot loads (default
 #             levels\test\bloodgulch\bloodgulch)
 # --seconds   how long the map runs once it is loaded (default 60)
+# --menu-seconds how long the menu runs once its music starts (default 10)
 # --timeout   the longest a phase may take to reach its mark (default 1800)
 # --display   an X display to run on; without one, the test starts its own
 #             Xvfb (Xenia needs a window, and Vulkan: a GPU's, or Mesa's
@@ -47,6 +48,7 @@ out=
 maps_root="$HOME/halo-maps/new-data-root.sh"
 map='levels\test\bloodgulch\bloodgulch'
 seconds=60
+menu_seconds=10
 timeout=1800
 display=${DISPLAY:-}
 puts=()
@@ -59,6 +61,7 @@ while [ $# -gt 0 ]; do
 		--maps-root) maps_root=$2; shift 2 ;;
 		--map) map=$2; shift 2 ;;
 		--seconds) seconds=$2; shift 2 ;;
+		--menu-seconds) menu_seconds=$2; shift 2 ;;
 		--timeout) timeout=$2; shift 2 ;;
 		--display) display=$2; shift 2 ;;
 		--put) puts+=("$2"); shift 2 ;;
@@ -317,7 +320,7 @@ phase() {
 }
 
 status=0
-phase menu "" "" "starting main menu music" 10 || status=1
+phase menu "" "" "starting main menu music" "$menu_seconds" || status=1
 # (the map: the game's init.txt; it is in once its scripts are read, which
 # follows its tags and its structure bsp)
 phase map "map_name $map" "starting precaching of map '${map##*\\}'" "scenario scripts:" "$seconds" || status=1

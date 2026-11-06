@@ -21,7 +21,8 @@
 # --keep      leave the folder on the host
 # --put       a file here put in the game's folder there (config.toml,
 #             gl.txt); may be given more than once
-# Anything else goes to xenia_smoke.sh (--map, --seconds, --timeout).
+# Anything else goes to xenia_smoke.sh (--map, --seconds, --menu-seconds,
+# --timeout).
 #
 # Paths on the host may start with ~/, which the host expands.
 set -euo pipefail
@@ -45,7 +46,7 @@ while [ $# -gt 0 ]; do
 		--logs) logs=$2; shift 2 ;;
 		--keep) keep=1; shift ;;
 		--put) puts+=("$2"); shift 2 ;;
-		--map|--seconds|--timeout) pass+=("$1" "$2"); shift 2 ;;
+		--map|--seconds|--menu-seconds|--timeout) pass+=("$1" "$2"); shift 2 ;;
 		*) echo "$0: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
