@@ -1218,6 +1218,9 @@ void console_draw(const struct console_draw *draw)
 	if (constant_count)
 	{
 		unsigned long vertex_bytes = constant_count * 16, vertices = draw->vertex_count ? draw->vertex_count : 1;
+		/* (only the vertices drawn: the stream starts that many before its
+		copies, which the draw never reads; x360_gl.c's) */
+		unsigned long skipped = draw->vertex_first < vertices ? draw->vertex_first : 0;
 		float vector[CONSOLE_VERTEX_REGISTERS][4];
 		unsigned long *copy;
 		unsigned long reg, made = 0;
@@ -1227,16 +1230,17 @@ void console_draw(const struct console_draw *draw)
 			if ((constant_registers >> reg) & 1)
 				memcpy(vector[made++], draw->constant_values[reg], 16);
 		}
-		copy = console_frame_copy(NULL, vertex_bytes * vertices);
-		if (!copy)
+		copy = console_frame_copy(NULL, vertex_bytes * (vertices - skipped));
+		if (!copy || (UINT_PTR)copy < skipped * vertex_bytes + 0x100000)
 		{
 			DEVICE_TIME_END();
 			return;
 		}
-		for (index = 0; index < vertices; index++)
+		for (index = 0; index < vertices - skipped; index++)
 			copy_words(copy + index * (vertex_bytes / 4), vector, vertex_bytes);
-		X360_COUNT(ring_bytes, vertex_bytes * vertices);
-		stream_set(constant_stream, copy, vertex_bytes * vertices, vertex_bytes, FALSE);
+		X360_COUNT(ring_bytes, vertex_bytes * (vertices - skipped));
+		stream_set(constant_stream, (unsigned char *)copy - skipped * vertex_bytes, vertex_bytes * vertices,
+			vertex_bytes, FALSE);
 	}
 
 	if (draw->indices)
