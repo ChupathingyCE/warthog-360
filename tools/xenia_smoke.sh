@@ -17,6 +17,9 @@
 #             levels\test\bloodgulch\bloodgulch)
 # --seconds   how long the map runs once it is loaded (default 60)
 # --menu-seconds how long the menu runs once its music starts (default 10)
+# --xenia-arg an option for Xenia, given more than once for more
+#             (--readback_resolve=full lets the game read back the pictures
+#             its GPU resolves, for console.picture_frame's pictures)
 # --timeout   the longest a phase may take to reach its mark (default 1800)
 # --display   an X display to run on; without one, the test starts its own
 #             Xvfb (Xenia needs a window, and Vulkan: a GPU's, or Mesa's
@@ -52,6 +55,7 @@ menu_seconds=10
 timeout=1800
 display=${DISPLAY:-}
 puts=()
+xenia_args=()
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -65,6 +69,7 @@ while [ $# -gt 0 ]; do
 		--timeout) timeout=$2; shift 2 ;;
 		--display) display=$2; shift 2 ;;
 		--put) puts+=("$2"); shift 2 ;;
+		--xenia-arg) xenia_args+=("$2"); shift 2 ;;
 		*) echo "$0: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -269,7 +274,7 @@ phase() {
 	echo "$name: starting Xenia"
 	DISPLAY=$display XENIA_RDWR_ROOT="$out/" LD_PRELOAD="$shim" "$xenia" --gpu=vulkan --apu=nop --allow_game_relative_writes=true \
 		--storage_root="$out/xenia/storage" --content_root="$out/xenia/content" --cache_root="$out/xenia/cache" \
-		--log_file="$logs/xenia.log" "$game/default.xex" > "$logs/xenia.out" 2>&1 &
+		--log_file="$logs/xenia.log" "${xenia_args[@]+"${xenia_args[@]}"}" "$game/default.xex" > "$logs/xenia.out" 2>&1 &
 	xenia_pid=$!
 	started=$(date +%s)
 	while :; do
