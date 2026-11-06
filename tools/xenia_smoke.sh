@@ -299,6 +299,11 @@ phase() {
 	cp "$game/port.txt" "$game/config.toml" "$logs/" 2> /dev/null || true
 	cp "$game/debug.txt" "$logs/port-debug.txt" 2> /dev/null || true
 	mv "$game"/*.raw "$logs/" 2> /dev/null || true
+	# (the shaders the console compiled, game:\shaders: a cache to ship)
+	if [ -d "$game/shaders" ]; then
+		rm -rf "$logs/shaders"
+		cp -r "$game/shaders" "$logs/shaders"
+	fi
 	# (shaders the console could not compile: x360_gl.c's game:\glsl)
 	if [ -d "$game/glsl" ]; then
 		mv "$game/glsl" "$logs/glsl"
