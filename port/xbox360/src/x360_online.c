@@ -493,13 +493,15 @@ void x360_game_list_request(void)
 	shown_state = X360_GAME_LIST_FETCHING;
 	set_state(_list_fetching);
 	/* (LIST_THREAD_STACK, given back when the thread ends) */
-	thread = CreateThread(NULL, LIST_THREAD_STACK, online_thread, NULL, 0, NULL);
+	thread = CreateThread(NULL, LIST_THREAD_STACK, online_thread, NULL, CREATE_SUSPENDED, NULL);
 	if (!thread)
 	{
 		list_error = GAME_LIST_ERROR_CONNECT;
 		set_state(_list_failed);
 		return;
 	}
+	XSetThreadProcessor(thread, X360_THREAD_NETWORK);
+	ResumeThread(thread);
 	CloseHandle(thread);
 }
 

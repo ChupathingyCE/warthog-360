@@ -46,9 +46,11 @@ static int link_start_thread(void (*function)(void *context), void *context)
 	/* (console_link.c runs one at a time, so one start's place is enough) */
 	link_thread_start.function = function;
 	link_thread_start.context = context;
-	thread = CreateThread(NULL, LINK_STACK, link_thread, &link_thread_start, 0, NULL);
+	thread = CreateThread(NULL, LINK_STACK, link_thread, &link_thread_start, CREATE_SUSPENDED, NULL);
 	if (!thread)
 		return 0;
+	XSetThreadProcessor(thread, X360_THREAD_NETWORK);
+	ResumeThread(thread);
 	CloseHandle(thread);
 	return 1;
 }
