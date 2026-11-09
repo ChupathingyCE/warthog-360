@@ -46,11 +46,10 @@ ninja xbox360
 it, every assert of the debug decomp runs on every tick and draw. The
 original Xbox's tester builds and the Wii U's CI builds use it too.
 
-The output is `build/xbox360/default.xex`. After the link, the build
-writes the DOS header and stub that Microsoft's linker writes
-(`tools/xbox360_dos_header.py`), and links with a copy of OXDK's
-`title.ld` that puts the SDK's `.XBMOVIE$` data in a writable section
-(`tools/xbox360_linker_script.py`). Xenia needs both. `ninja` reruns `configure.py`
+The output is `build/xbox360/default.xex`. OXDK's cxex writes the DOS
+header and stub Microsoft's linker writes, and OXDK's `title.ld` puts the
+SDK's `.XBMOVIE$` data in a writable section; Xenia needs both, and the
+build asks for an OXDK that has them. `ninja` reruns `configure.py`
 with the same options when the build's files change. Without the
 toolchain or the SDK, `ninja xbox360` stops and says what is missing.
 
