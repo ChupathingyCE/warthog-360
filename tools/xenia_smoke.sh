@@ -37,8 +37,8 @@
 #
 # The second boot loads its map with the game's own d:\init.txt in the
 # test's game folder. The XEX runs as it was built: ninja xbox360 gives it
-# the DOS header Microsoft's linker writes, which Xenia checks
-# (tools/xbox360_dos_header.py), and the test stops early on one without it.
+# the DOS header Microsoft's linker writes (OXDK's cxex), which Xenia
+# checks, and the test stops early on one without it.
 # Xenia writes in the game's folder only with --allow_game_relative_writes,
 # which the test gives it (the game keeps its settings and logs there).
 #
@@ -222,7 +222,7 @@ if data[:4] != b"XEX2":
     sys.exit("not an XEX2 file")
 image = struct.unpack(">I", data[8:12])[0]
 if data[image:image + 4] != b"MZ\x90\x00":
-    sys.exit("its DOS header is not the one Xenia loads (built before tools/xbox360_dos_header.py?)")
+    sys.exit("its DOS header is not the one Xenia loads (built with an OXDK older than its DOS stub?)")
 EOF
 cp "$xex" "$game/default.xex"
 data="$out/data"

@@ -13,17 +13,17 @@
 
 <p align="center"><img src="docs/screenshots/xbox-360.jpg" width="640" alt="Blood Gulch on an Xbox 360"></p>
 
-Play Chupathingy as homebrew on an RGH/JTAG 360, or one running a softmod
-like BadUpdate or BadAvatar, started from a launcher such as Aurora. Join
-the same online games as PCs and other consoles.
+Play Chupathingy as homebrew on an Xbox 360, and join the same online games
+as PCs and other consoles.
 
-**Status: early test build.** Multiplayer maps load and play, and the
-console joins servers through Online Games. The campaign isn't a goal yet.
-Expect lag, some noise in the picture over time, and a flickering HUD.
-We're working on all three.
+**Status: early test builds.** Multiplayer is the focus. The campaign isn't
+a goal yet. Earlier builds played Blood Gulch on a real console. The newest
+test build has so far run in the Xenia emulator, where it reaches the main
+menu and plays Blood Gulch.
 
-Test builds are shared in #xbox-360 on the [Discord](https://discord.gg/chupathingy).
-You can also build it yourself (below).
+Test builds are shared in #xbox-360 on the
+[Discord](https://discord.gg/chupathingy). You can also build it yourself
+(below).
 
 You need your own copy of Halo. No game files or SDK files are included.
 
@@ -31,60 +31,88 @@ This repository holds the Xbox 360 port. The game itself is the
 `chupathingyce` submodule. The original Xbox port is
 [warthog-xbox](https://github.com/ChupathingyCE/warthog-xbox).
 
-## Details
-
-- **Multiplayer:** the focus. The campaign is not a goal yet.
-- **Networking:** joins PC and server games. The game's messages go on the
-  wire in the PC's byte order, and a start-up self-test checks it.
-- **Memory:** sized for the 360's 512 MB, not the original Xbox's 64 MB.
-- **No high-res HUD:** the 360 draws the maps' own HUD and fonts. The
-  desktop extras stay out until the baseline holds, then come back one at a
-  time.
-- **How it draws:** the game's Direct3D 8 goes through the desktop
-  renderer's OpenGL, which a GL layer of the port's own puts on the
-  console's Direct3D 9, with GLSL turned into HLSL on the console.
-
-Known issues: lag; a film-grain-like noise in the picture over time; HUD and
-reticle vertices popping.
-
-[port/xbox360/README.md](port/xbox360/README.md) has the details, the known
-issues and the developer tools.
-
 ## What you need
 
-- **A console that runs your own code.** An RGH/JTAG 360, or one running a
-  softmod like BadUpdate or BadAvatar, started from a launcher such as
-  Aurora, or a development kit.
-- **Your own Halo maps.** The original Xbox's North American (NTSC)
-  release, 01.10.12.2276, as every Chupathingy build and server uses.
-  Warthog never provides maps, disc images or other game data, and never
-  links to them. Don't share yours.
-- **To build it** (below): a Mac or Linux computer, and your own Xbox 360
-  SDK.
+- **A console that runs homebrew.** An RGH/JTAG 360, or one running a
+  softmod like BadUpdate or BadAvatar, with a launcher such as Aurora. A
+  development kit works too.
+- **Your own Halo maps.** The `maps` folder from your own original Xbox
+  Halo disc: the North American (NTSC) release, 01.10.12.2276, as every
+  Chupathingy build and server uses. Warthog never provides maps, disc
+  images or other game data, and never links to them. Don't share yours.
+- **To build it yourself** (below): a Mac or Linux computer, and your own
+  Xbox 360 SDK.
 
 ## Install
 
-With Aurora (or another launcher for homebrew):
+1. Get the newest test build from #xbox-360 on the
+   [Discord](https://discord.gg/chupathingy) and unzip it.
+2. Copy its folder to the console's hard drive, for example
+   `Hdd1:\Games\Warthog360\` (FTP or XBDM).
+3. Put your own Halo maps in its `maps` folder. At least `ui.map` is
+   needed.
+4. Add the folder to Aurora's content paths, or start `default.xex` from
+   your launcher's file browser.
 
-1. Get `default.xex`: the test build from the Discord, or build it yourself
-   (see "Building it yourself").
-2. Copy the `maps` folder from your own disc to your computer.
-3. Lay the game out: `python3 tools/xbox360_package.py --maps /path/to/maps --out ~/Downloads/Warthog-360`.
-   This puts `default.xex` and your maps in one folder.
-4. Copy that folder to the console, for example to `Hdd1:\Games\Warthog360\`.
-5. Add that folder to Aurora's content paths, or start `default.xex` from your launcher's file browser.
+To update, replace `default.xex`. Keep `config.toml`, the `maps` folder
+and the `shaders` folder.
 
-The maps are your own NTSC maps (01.10.12.2276) in the `maps` folder beside
-`default.xex`; at least `ui.map` is needed.
+## What works
 
-To report a problem, tell us in #xbox-360 on the Discord and attach the logs.
+- **Online Games:** lists the games online and joins them, dedicated
+  servers too. It joins OpenCE's newest servers (network version 41) and
+  older ones. Co-op games are listed too, with a filter.
+- **Up to 16 players.** Players past 16 in a bigger game aren't seen.
+- **Link your Delta profile:** on Online Games, press **Start**, then **A**
+  for a code. Enter it at stats.chupathingy.org/connect, signed in on your
+  phone or computer, then press **A** on the console.
+- **Split screen:** when you join a game in progress, the host waits a few
+  seconds for the other players on your console.
+- **Multiplayer maps** load and play offline.
 
-The game writes its log to `game:\debug.txt`, and the port's own to
-`game:\port.txt` and the debug channel. Attach them to bug reports.
-Settings are in `game:\config.toml`, written at the first start.
-Compiled shaders are kept in `game:\shaders`, so each one is compiled
-once, not at every start. Deleting the folder is safe: they are compiled
-again.
+## Known issues
+
+- **Lag**, and the frame rate drops when you shoot at another player
+  ([#11](https://github.com/ChupathingyCE/warthog-360/issues/11)).
+- **A film-grain-like noise** in the picture over time, and HUD and reticle
+  vertices popping.
+- **No movies.** The intro and attract videos are skipped.
+- **The campaign** isn't tested. 343 Guilty Spark and The Silent
+  Cartographer have known drawing problems
+  ([#15](https://github.com/ChupathingyCE/warthog-360/issues/15),
+  [#16](https://github.com/ChupathingyCE/warthog-360/issues/16)).
+- **Not yet checked with the newest build:** scope zoom draws a glitched
+  screen ([#9](https://github.com/ChupathingyCE/warthog-360/issues/9)), a
+  dark shade follows the player on some maps
+  ([#12](https://github.com/ChupathingyCE/warthog-360/issues/12)), the blue
+  cursor stretches on open maps
+  ([#13](https://github.com/ChupathingyCE/warthog-360/issues/13)), the
+  overshield draws wrong
+  ([#14](https://github.com/ChupathingyCE/warthog-360/issues/14)), settings
+  and the button layout don't save
+  ([#8](https://github.com/ChupathingyCE/warthog-360/issues/8)), joining
+  games in progress and OpenCE games
+  ([#10](https://github.com/ChupathingyCE/warthog-360/issues/10)).
+
+## Reporting problems
+
+1. Copy `port.txt`, `debug.txt` and `logs\debug.txt` from the game's folder
+   to your computer.
+2. Send them at [dump.chupathingy.org](https://dump.chupathingy.org), with
+   "Xbox 360" as the platform. You get a reference code.
+3. Tell us in #xbox-360 on the [Discord](https://discord.gg/chupathingy)
+   what you were doing, and give the code.
+
+## Files in the game's folder
+
+- `config.toml`: the settings, written at the first start.
+- `debug.txt` and `logs\debug.txt`: the game's log. `port.txt`: the
+  console layer's log (also on the debug channel).
+- `shaders`: compiled shaders, kept so each one is compiled once. Deleting
+  the folder is safe: they are compiled again.
+
+[port/xbox360/README.md](port/xbox360/README.md) has the port's details,
+how it draws, the networking and the developer tools.
 
 ## Building it yourself
 
@@ -99,9 +127,12 @@ cd warthog-360
 
 You need:
 - Python 3 and [ninja](https://ninja-build.org/).
-- [OXDK360](https://github.com/MrMilenko/OXDK360) in `~/OXDK360` or
-  `~/OXDK/xbox360` (`--oxdk360 DIR`), with its `cxex` built, and its patched
-  LLVM in `~/llvm-xenon` (`--llvm-xenon DIR`).
+- [OXDK](https://github.com/MrMilenko/OXDK), whose `xbox360` folder has
+  the 360 tools: `~/OXDK/xbox360` (or `--oxdk360 DIR`), with its `cxex`
+  built.
+- OXDK's patched LLVM (`./oxdk build-llvm` builds it), in `~/llvm-xenon`
+  or given with `--llvm-xenon DIR` (`--llvm-xenon ~/oxdk-llvm` for where
+  OXDK puts it).
 - Your own extracted Xbox 360 SDK, the folder holding
   `lib/xbox/xboxkrnl.lib` (`--xdk360 DIR`, or `XDK_DIR`).
 
@@ -187,7 +218,7 @@ not be part of our community.
 - The game: [Chupathingy](https://github.com/ChupathingyCE/chupathingyce),
   and OpenCE and its contributors, up to October 9, 2026.
 - Warthog 360: [Milenko](https://github.com/MrMilenko) and contributors.
-  The toolchain: [OXDK360](https://github.com/MrMilenko/OXDK360).
+  The toolchain: [OXDK](https://github.com/MrMilenko/OXDK).
 - Libraries: zlib, KCP, Monocypher, Expat, tomlc17 and the other libraries
   the game uses, with their licenses in the game's `port/third_party`.
 

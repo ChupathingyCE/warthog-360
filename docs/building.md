@@ -1,7 +1,7 @@
 # Building Warthog 360
 
-Warthog 360 builds on macOS or Linux with OXDK360's patched clang and your
-own Xbox 360 SDK. Windows has no build path yet.
+Warthog 360 builds on macOS or Linux with OXDK's Xbox 360 tools, its patched
+clang and your own Xbox 360 SDK. Windows has no build path yet.
 
 ## 1. The repository and the game
 
@@ -17,11 +17,14 @@ it again.
 ## 2. The toolchain
 
 - Python 3 and [ninja](https://ninja-build.org/) (`brew install ninja`).
-- [OXDK360](https://github.com/MrMilenko/OXDK360), in `~/OXDK360` or
-  `~/OXDK/xbox360` (or `--oxdk360 DIR`, `OXDK360_DIR`), with
-  `tools/cxex` built as its README says.
-- OXDK360's patched LLVM (the Xenon calling convention), built in
-  `~/llvm-xenon` (or `--llvm-xenon DIR`, `LLVM_XENON_DIR`).
+- [OXDK](https://github.com/MrMilenko/OXDK). Its `xbox360` folder holds
+  the Xbox 360 tools: `~/OXDK/xbox360` (or `--oxdk360 DIR`, `OXDK360_DIR`),
+  with `tools/cxex` built as its README says. A separate OXDK360 checkout
+  in `~/OXDK360` is still found, but OXDK is the one to use.
+- OXDK's patched LLVM (the Xenon calling convention). `./oxdk build-llvm`
+  builds it in `~/oxdk-llvm`. Give that with `--llvm-xenon DIR` (or
+  `LLVM_XENON_DIR`), or build it in `~/llvm-xenon`, which is found on its
+  own.
 - LLVM's `llvm-objcopy` (`brew install llvm` on macOS), if the patched
   LLVM has none.
 
@@ -43,7 +46,10 @@ ninja xbox360
 it, every assert of the debug decomp runs on every tick and draw. The
 original Xbox's tester builds and the Wii U's CI builds use it too.
 
-The output is `build/xbox360/default.xex`. `ninja` reruns `configure.py`
+The output is `build/xbox360/default.xex`. OXDK's cxex writes the DOS
+header and stub Microsoft's linker writes, and OXDK's `title.ld` puts the
+SDK's `.XBMOVIE$` data in a writable section; Xenia needs both, and the
+build asks for an OXDK that has them. `ninja` reruns `configure.py`
 with the same options when the build's files change. Without the
 toolchain or the SDK, `ninja xbox360` stops and says what is missing.
 
@@ -66,6 +72,15 @@ python3 tools/xbox360_package.py --maps /path/to/maps --out ~/Downloads/Warthog-
 puts `default.xex` and your maps in one folder for the console. See
 [port/xbox360/README.md](../port/xbox360/README.md) for running it and its
 logs.
+
+## Smoke test in Xenia
+
+`tools/xenia_smoke.sh` boots the build in Xenia Canary on Linux, to the
+main menu and then into Blood Gulch for 60 seconds.
+`tools/xenia_smoke_remote.sh` runs it from a Mac on a Linux machine over
+ssh. [port/xbox360/README.md](../port/xbox360/README.md) has the options
+and what the test works around. A pass in Xenia is not a pass on a
+console.
 
 ## Updating the game
 
