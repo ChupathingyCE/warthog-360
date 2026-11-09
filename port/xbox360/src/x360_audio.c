@@ -134,7 +134,7 @@ _Bool SDL_ResumeAudioStreamDevice(void *stream)
 	if (!thread)
 		return 0;
 	/* (on a core of its own, away from the game's) */
-	XSetThreadProcessor(thread, 4);
+	XSetThreadProcessor(thread, X360_THREAD_AUDIO);
 	SetThreadPriority(thread, THREAD_PRIORITY_ABOVE_NORMAL);
 	ResumeThread(thread);
 	CloseHandle(thread);

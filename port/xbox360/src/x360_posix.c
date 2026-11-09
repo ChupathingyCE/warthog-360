@@ -74,6 +74,15 @@ static DWORD WINAPI thread_main(LPVOID parameter)
 	return 0;
 }
 
+int x360_thread_helper_processor(void)
+{
+	static const int processors[] = { 2, 3, 5 };
+	static volatile LONG next;
+	LONG turn = InterlockedIncrement(&next) - 1;
+
+	return processors[(unsigned long)turn % (sizeof(processors) / sizeof(processors[0]))];
+}
+
 int pthread_create(pthread_t *thread, const pthread_attr_t *attributes, void *(*start)(void *), void *argument)
 {
 	struct thread_start *parameter = malloc(sizeof(*parameter));
@@ -87,12 +96,15 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attributes, void *(*
 		return EAGAIN;
 	parameter->start = start;
 	parameter->argument = argument;
-	handle = CreateThread(NULL, stack_size, thread_main, parameter, 0, &identifier);
+	handle = CreateThread(NULL, stack_size, thread_main, parameter, CREATE_SUSPENDED, &identifier);
 	if (!handle)
 	{
 		free(parameter);
 		return EAGAIN;
 	}
+	/* (away from the game's hardware thread: x360_port.h) */
+	XSetThreadProcessor(handle, (DWORD)x360_thread_helper_processor());
+	ResumeThread(handle);
 	CloseHandle(handle);
 	*thread = identifier;
 	return 0;
