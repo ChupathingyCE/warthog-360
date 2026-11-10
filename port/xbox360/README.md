@@ -6,7 +6,7 @@
 
 Blood Gulch loads, draws and plays (driven in a Ghost on hardware, still a little laggy). Networking works on hardware: the console lists and joins servers (below). A multiplayer game plays on the console. The campaign is not a goal yet. There is no high-res HUD on the 360: it is built without the high-res HUD's pictures, and the maps' own HUD is drawn. The build is a console build (`HALO_CONSOLE`): the desktop extras stay out until the baseline holds, then come back one at a time. It is sized for the 360's 512 MB, not the original Xbox's 64 MB.
 
-Test build 2 (2026-11-05, game 0.9.0) reaches the main menu and plays Blood Gulch in Xenia ("Smoke test in Xenia", below). It has not run on a console yet. The network tables hold 16 players (`--console-players`, 16 by default).
+Test build 2 (2026-11-05, game 0.9.0) reaches the main menu and plays Blood Gulch in Xenia ("Smoke test in Xenia", below). It has not run on a console yet. Test builds hold 32 players (`--console-players 32`; the game's default is 16).
 
 Known issues, under investigation:
 
@@ -45,11 +45,11 @@ Every build logs a frame's counts and times every 10 seconds (`src/x360_frame_co
 From the repository's root:
 
 ```sh
-python3 chupathingyce/configure.py --console-port port/xbox360 --xdk360 ~/xdk360-extract/sdk/XDK
+python3 chupathingyce/configure.py --console-port port/xbox360 --xdk360 ~/xdk360-extract/sdk/XDK --console-players 32
 ninja xbox360
 ```
 
-`--console-players` (16 by default) and `--console-no-debug-asserts` are the game's options for every console (the game's docs/building.md, "Console ports").
+`--console-players` (16 by default, 32 for test builds) and `--console-no-debug-asserts` are the game's options for every console (the game's docs/building.md, "Console ports").
 
 For the developer tools (below), configure with `--console-debug-tools`.
 

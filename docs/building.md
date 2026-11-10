@@ -38,13 +38,16 @@ from the SDK is in this repository, and none of it may be committed.
 ## 4. Configure and build
 
 ```sh
-python3 chupathingyce/configure.py --console-port port/xbox360 --console-no-debug-asserts [--xdk360 DIR]
+python3 chupathingyce/configure.py --console-port port/xbox360 --console-no-debug-asserts \
+    --console-players 32 [--xdk360 DIR]
 ninja xbox360
 ```
 
 `--console-no-debug-asserts` is the build for testers and test runs. Without
 it, every assert of the debug decomp runs on every tick and draw. The
 original Xbox's tester builds and the Wii U's CI builds use it too.
+`--console-players 32` is the tester build's 32 players, as on the
+original Xbox and the Wii U.
 
 The output is `build/xbox360/default.xex`. OXDK's cxex writes the DOS
 header and stub Microsoft's linker writes, and OXDK's `title.ld` puts the
@@ -56,7 +59,7 @@ toolchain or the SDK, `ninja xbox360` stops and says what is missing.
 | Option | What it does |
 | --- | --- |
 | `--console-debug-tools` | the developer tools: the probe triangle, the frame profiler, the GL layer's timers, the allocation counting, the bring-up logs and the test switches of `game:\gl.txt` |
-| `--console-players {16,24,32,64}` | the players the network tables hold; 16, the Xbox's, by default |
+| `--console-players {16,24,32,64}` | the players the network tables hold. The game's default is 16, the Xbox's; test builds are 32. The online list then asks for games of up to that many (`players=N`), and Delta hears the same count |
 | `--console-no-debug-asserts` | the debug decomp's asserts compiled out, as retail compiled them out, except the memory checks (the tester build) |
 | `--release` | a failed assertion is logged and the game goes on |
 
