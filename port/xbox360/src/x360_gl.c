@@ -561,6 +561,8 @@ static struct
 	LARGE_INTEGER frequency;
 	DWORD last_report;
 	unsigned long frames, draws, idle_waits, fence_waits, ring_bytes, textures_deleted;
+	/* (textures dropped for memory, and ones made again after they could not be) */
+	unsigned long textures_dropped, textures_reloaded;
 	double idle_wait_ms, fence_wait_ms, frame_ms;
 	/* (time inside the GL layer: draws, texture and buffer uploads, the
 	present's resolve and blit) */
@@ -751,23 +753,51 @@ textures could not be made (drawn flat) and then nothing could. Between
 frames, while the textures are over their budget or memory runs low, the
 ones not drawn lately are dropped (sooner each time it doesn't help), and a
 texture that could not be made has everything idle dropped and is made again
-the next time it is drawn. */
+the next time it is drawn. While textures keep failing, that is done at
+most every few frames, and its log lines at most every ten seconds. */
 #define TEXTURE_MEMORY_BUDGET_MB 192
 #define TEXTURE_MEMORY_LOW_FREE_MB 24
 #define TEXTURE_MEMORY_CHECK_FRAMES 30
 #define TEXTURE_MEMORY_FAILED_MAXIMUM 64
+#define TEXTURE_MEMORY_FAILED_INTERVAL_FRAMES 10
+#define TEXTURE_MEMORY_LOG_MS 10000
 
 /* port/linux/src/xgpu.h's: the shared texture cache's */
 unsigned long xgpu_texture_cache_drop_idle(unsigned long frames);
 void xgpu_texture_cache_reload(GLuint texture);
+unsigned long xgpu_texture_cache_reload_missing(int (*missing)(GLuint texture));
+
+/* a log line at most every ten seconds; the next one says how many were held back */
+struct log_limit
+{
+	DWORD last;
+	unsigned long held;
+};
+
+static BOOL log_limit_due(struct log_limit *limit)
+{
+	DWORD now = GetTickCount();
+
+	if (limit->last && now - limit->last < TEXTURE_MEMORY_LOG_MS)
+	{
+		limit->held++;
+		return FALSE;
+	}
+	limit->last = now ? now : 1;
+	return TRUE;
+}
 
 static struct
 {
-	/* every console texture's bytes (not the render targets') */
+	/* every console texture's bytes (Direct3D's measure or the estimate,
+	whichever is more), but the render targets': the texture cache can't
+	drop those */
 	unsigned long bytes;
 	/* how many checks in a row have found the textures over (0 to 2) */
 	int pressure;
-	unsigned long last_log;
+	struct log_limit dropped_log, failed_log, cannot_make_log;
+	/* the frame the last textures that could not be made were handled */
+	unsigned long failed_frame;
 	/* the textures that could not be made since the last check */
 	GLuint failed[TEXTURE_MEMORY_FAILED_MAXIMUM];
 	int failed_count;
@@ -817,16 +847,32 @@ static void texture_memory_failed(GLuint name, unsigned long width, unsigned lon
 		texture_memory.failed_overflow = TRUE;
 		return;
 	}
-	if (!texture_memory.failed_count)
+	if (!texture_memory.failed_count && log_limit_due(&texture_memory.failed_log))
 	{
-		x360_log("gl: out of memory for textures: a %lux%lu one could not be made (%lu MB of textures); "
-			"dropping the ones not drawn lately, it is made again next frame", width, height,
-			texture_memory.bytes >> 20);
+		x360_log("gl: out of memory for textures: a %lux%lu one could not be made (%lu MB of textures, "
+			"%lu more times since the last line); dropping the ones not drawn lately, it is made again soon",
+			width, height, texture_memory.bytes >> 20, texture_memory.failed_log.held);
+		texture_memory.failed_log.held = 0;
 	}
 	texture_memory.failed[texture_memory.failed_count++] = name;
 }
 
 static void retired_textures_free(int half);
+
+/* a texture the cache holds that has no console texture (it could not be made) */
+static int texture_missing(GLuint name)
+{
+	struct texture *texture = object_get(name, _object_texture);
+
+	return texture && !texture->d3d && !texture->depth_format && !texture->surface;
+}
+
+/* the texture's bytes taken off the textures' count */
+static void texture_memory_uncount(struct texture *texture)
+{
+	texture_memory.bytes -= texture->bytes < texture_memory.bytes ? texture->bytes : texture_memory.bytes;
+	texture->bytes = 0;
+}
 
 /* between frames: the textures back under their budget, and the ones that
 could not be made made again */
@@ -839,6 +885,13 @@ static void texture_memory_check(void)
 
 	if (!failed && gl.frame % TEXTURE_MEMORY_CHECK_FRAMES)
 		return;
+	/* (while textures keep failing, the wait for the GPU below only every
+	few frames) */
+	if (failed && texture_memory.failed_frame &&
+		gl.frame - texture_memory.failed_frame < TEXTURE_MEMORY_FAILED_INTERVAL_FRAMES)
+	{
+		return;
+	}
 	{
 		MEMORYSTATUS status;
 
@@ -856,23 +909,38 @@ static void texture_memory_check(void)
 	frames = failed ? TEXTURE_MEMORY_IDLE_FRAMES_FAILED : texture_memory.pressure == 1 ?
 		TEXTURE_MEMORY_IDLE_FRAMES_FIRST : TEXTURE_MEMORY_IDLE_FRAMES_AGAIN;
 	dropped = xgpu_texture_cache_drop_idle(frames);
+	stats.textures_dropped += dropped;
 	if (failed)
 	{
 		/* (what was dropped freed now, not two frames on: the GPU is done
-		with every frame's textures) */
+		with every frame's textures, and no sampler is left on one) */
 		gpu_idle_wait();
+		for (index = 0; index < TEXTURE_UNITS; index++)
+			IDirect3DDevice9_SetTexture(gl.device, (DWORD)index, NULL);
 		retired_textures_free(0);
 		retired_textures_free(1);
-		for (index = 0; index < texture_memory.failed_count; index++)
-			xgpu_texture_cache_reload(texture_memory.failed[index]);
+		/* (more failed than were listed: every texture without its console
+		texture is made again) */
+		if (texture_memory.failed_overflow)
+		{
+			stats.textures_reloaded += xgpu_texture_cache_reload_missing(texture_missing);
+		}
+		else
+		{
+			for (index = 0; index < texture_memory.failed_count; index++)
+				xgpu_texture_cache_reload(texture_memory.failed[index]);
+			stats.textures_reloaded += (unsigned long)texture_memory.failed_count;
+		}
 		texture_memory.failed_count = 0;
 		texture_memory.failed_overflow = FALSE;
+		texture_memory.failed_frame = gl.frame ? gl.frame : 1;
 	}
-	if (dropped && (failed || GetTickCount() - texture_memory.last_log >= 10000))
+	if (dropped && log_limit_due(&texture_memory.dropped_log))
 	{
-		texture_memory.last_log = GetTickCount();
-		x360_log("gl: dropped %lu textures not drawn in %lu frames (%lu MB of textures, budget %lu MB; %lu MB free)",
-			dropped, frames, bytes_before >> 20, (unsigned long)TEXTURE_MEMORY_BUDGET_MB, free_mb);
+		x360_log("gl: dropped %lu textures not drawn in %lu frames (%lu MB of textures, budget %lu MB; %lu MB free; "
+			"%lu more drops since the last line)", dropped, frames, bytes_before >> 20,
+			(unsigned long)TEXTURE_MEMORY_BUDGET_MB, free_mb, texture_memory.dropped_log.held);
+		texture_memory.dropped_log.held = 0;
 	}
 }
 
@@ -1027,8 +1095,7 @@ static void texture_defaults(struct texture *texture)
 
 static void texture_release(struct texture *texture)
 {
-	texture_memory.bytes -= texture->bytes < texture_memory.bytes ? texture->bytes : texture_memory.bytes;
-	texture->bytes = 0;
+	texture_memory_uncount(texture);
 	if (texture->phys)
 		x360_phys_account(texture->phys_kind, -(long)texture->phys);
 	texture->phys = 0;
@@ -1132,15 +1199,22 @@ static BOOL texture_allocate(struct texture *texture, GLenum target, GLenum inte
 			(D3DTexture **)&texture->d3d, NULL);
 	if (FAILED(result) || !texture->d3d)
 	{
-		x360_log("gl: cannot make a %lux%lux%lu texture (format 0x%08lx, 0x%08lx)", width, height, depth,
-			(unsigned long)format, (unsigned long)result);
-		x360_phys_failure("texture", width * height * (depth ? depth : 1));
+		if (log_limit_due(&texture_memory.cannot_make_log))
+		{
+			x360_log("gl: cannot make a %lux%lux%lu texture (format 0x%08lx, 0x%08lx; %lu more since the last line)",
+				width, height, depth, (unsigned long)format, (unsigned long)result,
+				texture_memory.cannot_make_log.held);
+			texture_memory.cannot_make_log.held = 0;
+			x360_phys_failure("texture", width * height * (depth ? depth : 1));
+		}
 		texture->d3d = NULL;
 		return FALSE;
 	}
 	texture_count_phys(texture, phys_before);
 	texture->bytes = texture_bytes_estimate(width, height, target == GL_TEXTURE_3D ? depth : 1, levels,
 		target == GL_TEXTURE_CUBE_MAP ? 6 : 1, compressed, format == (D3DFORMAT)MAKELEFMT(D3DFMT_LIN_DXT1));
+	if (texture->bytes < texture->phys)
+		texture->bytes = texture->phys;
 	texture_memory.bytes += texture->bytes;
 	return TRUE;
 }
@@ -1367,6 +1441,8 @@ static BOOL texture_surface(struct texture *texture)
 	{
 		unsigned long phys_before;
 
+		/* (a target isn't the texture cache's to drop: not in the textures' count) */
+		texture_memory_uncount(texture);
 		if (texture->phys)
 			x360_phys_account(texture->phys_kind, -(long)texture->phys);
 		texture->phys = 0;
@@ -3278,9 +3354,19 @@ static void APIENTRY x360_glDeleteTextures(GLsizei n, const GLuint *names)
 	for (index = 0; index < n; index++)
 	{
 		struct texture *texture = object_get(names[index], _object_texture);
+		int unit, slot;
 
 		if (!texture)
 			continue;
+		/* (unbound wherever it was bound, as GL does) */
+		for (unit = 0; unit < TEXTURE_UNITS; unit++)
+		{
+			for (slot = 0; slot < 3; slot++)
+			{
+				if (gl.textures[unit][slot] == names[index])
+					gl.textures[unit][slot] = 0;
+			}
+		}
 		/* (not while the GPU may read it: released two frames on) */
 		texture_retire(texture);
 		stats.textures_deleted++;
@@ -4499,10 +4585,10 @@ static void x360_gl_swap_timed(void)
 		if (stats.frames)
 		{
 			x360_log("gl: %lu frames, %.1f ms a frame; a frame: %lu draws, %lu KB of draw data; waits: %lu idle "
-				"(%.1f ms), %lu fence (%.1f ms); %lu textures deleted",
+				"(%.1f ms), %lu fence (%.1f ms); %lu textures deleted, %lu dropped for memory, %lu made again",
 				stats.frames, stats.frame_ms / stats.frames, (gl.draws - stats.draws) / stats.frames,
 				stats.ring_bytes / stats.frames / 1024, stats.idle_waits, stats.idle_wait_ms, stats.fence_waits,
-				stats.fence_wait_ms, stats.textures_deleted);
+				stats.fence_wait_ms, stats.textures_deleted, stats.textures_dropped, stats.textures_reloaded);
 			x360_log("gl: a frame's time in the GL layer: draws %.1f ms, textures %.1f ms, buffers %.1f ms, "
 				"present %.1f ms; the rest (the game) %.1f ms; a draw's parts: program and state %.1f ms, indices %.1f ms, "
 				"vertices %.1f ms, draw calls %.1f ms", stats.draw_ms / stats.frames,
@@ -4515,6 +4601,7 @@ static void x360_gl_swap_timed(void)
 		}
 		stats.last_report = GetTickCount();
 		stats.frames = stats.idle_waits = stats.fence_waits = stats.ring_bytes = stats.textures_deleted = 0;
+		stats.textures_dropped = stats.textures_reloaded = 0;
 		stats.idle_wait_ms = stats.fence_wait_ms = stats.frame_ms = 0.0;
 		stats.draw_ms = stats.texture_ms = stats.buffer_ms = stats.present_ms = 0.0;
 		stats.prepare_ms = stats.index_ms = stats.vertices_ms = stats.issue_ms = stats.query_ms = 0.0;
