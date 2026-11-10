@@ -228,6 +228,8 @@ struct texture
 	/* physical bytes Direct3D took for d3d (counted by x360_phys_account) */
 	unsigned long phys;
 	int phys_kind;
+	/* its console texture's bytes, about (texture_memory) */
+	unsigned long bytes;
 };
 
 /* a buffer's bytes are where the GPU reads them: physical memory of its own
@@ -739,6 +741,141 @@ static void storage_flush(const void *data, unsigned long size)
 
 static void texture_release(struct texture *texture);
 
+/* The textures' memory. The game's textures are copied into console
+textures of their own (unlike the native renderer's, which draw from the
+game's memory in place), and the shared texture cache keeps one until it
+hasn't been drawn for half a minute (port/linux/src/xbox_textures.c). A map
+that streams many textures through the game's texture cache (The Silent
+Cartographer) made new ones faster than that gave them back, until
+textures could not be made (drawn flat) and then nothing could. Between
+frames, while the textures are over their budget or memory runs low, the
+ones not drawn lately are dropped (sooner each time it doesn't help), and a
+texture that could not be made has everything idle dropped and is made again
+the next time it is drawn. */
+#define TEXTURE_MEMORY_BUDGET_MB 192
+#define TEXTURE_MEMORY_LOW_FREE_MB 24
+#define TEXTURE_MEMORY_CHECK_FRAMES 30
+#define TEXTURE_MEMORY_FAILED_MAXIMUM 64
+
+/* port/linux/src/xgpu.h's: the shared texture cache's */
+unsigned long xgpu_texture_cache_drop_idle(unsigned long frames);
+void xgpu_texture_cache_reload(GLuint texture);
+
+static struct
+{
+	/* every console texture's bytes (not the render targets') */
+	unsigned long bytes;
+	/* how many checks in a row have found the textures over (0 to 2) */
+	int pressure;
+	unsigned long last_log;
+	/* the textures that could not be made since the last check */
+	GLuint failed[TEXTURE_MEMORY_FAILED_MAXIMUM];
+	int failed_count;
+	BOOL failed_overflow;
+} texture_memory;
+
+/* (how long a texture must not have been drawn to be dropped: about ten
+seconds, then two while it keeps being over; after a texture could not be
+made, any not drawn this frame or the last) */
+#define TEXTURE_MEMORY_IDLE_FRAMES_FIRST 600
+#define TEXTURE_MEMORY_IDLE_FRAMES_AGAIN 120
+#define TEXTURE_MEMORY_IDLE_FRAMES_FAILED 1
+
+/* about what a console texture takes: its levels' texels, a page at least */
+static unsigned long texture_bytes_estimate(unsigned long width, unsigned long height, unsigned long depth,
+	int levels, int faces, BOOL compressed, BOOL dxt1)
+{
+	unsigned long bytes = 0;
+	int level;
+
+	for (level = 0; level < levels; level++)
+	{
+		unsigned long w = width >> level ? width >> level : 1;
+		unsigned long h = height >> level ? height >> level : 1;
+		unsigned long d = depth >> level ? depth >> level : 1;
+
+		if (compressed)
+			bytes += (w + 3) / 4 * ((h + 3) / 4) * (dxt1 ? 8 : 16) * d;
+		else
+			bytes += w * h * 4 * d;
+	}
+	bytes *= (unsigned long)faces;
+	return (bytes + 4095) & ~4095UL;
+}
+
+static void texture_memory_failed(GLuint name, unsigned long width, unsigned long height)
+{
+	int index;
+
+	for (index = 0; index < texture_memory.failed_count; index++)
+	{
+		if (texture_memory.failed[index] == name)
+			return;
+	}
+	if (texture_memory.failed_count == TEXTURE_MEMORY_FAILED_MAXIMUM)
+	{
+		texture_memory.failed_overflow = TRUE;
+		return;
+	}
+	if (!texture_memory.failed_count)
+	{
+		x360_log("gl: out of memory for textures: a %lux%lu one could not be made (%lu MB of textures); "
+			"dropping the ones not drawn lately, it is made again next frame", width, height,
+			texture_memory.bytes >> 20);
+	}
+	texture_memory.failed[texture_memory.failed_count++] = name;
+}
+
+static void retired_textures_free(int half);
+
+/* between frames: the textures back under their budget, and the ones that
+could not be made made again */
+static void texture_memory_check(void)
+{
+	unsigned long bytes_before = texture_memory.bytes;
+	unsigned long free_mb, frames, dropped;
+	BOOL failed = texture_memory.failed_count > 0 || texture_memory.failed_overflow;
+	int index;
+
+	if (!failed && gl.frame % TEXTURE_MEMORY_CHECK_FRAMES)
+		return;
+	{
+		MEMORYSTATUS status;
+
+		GlobalMemoryStatus(&status);
+		free_mb = (unsigned long)(status.dwAvailPhys >> 20);
+	}
+	if (!failed && texture_memory.bytes <= (unsigned long)TEXTURE_MEMORY_BUDGET_MB << 20 &&
+		free_mb >= TEXTURE_MEMORY_LOW_FREE_MB)
+	{
+		texture_memory.pressure = 0;
+		return;
+	}
+	if (texture_memory.pressure < 2)
+		texture_memory.pressure++;
+	frames = failed ? TEXTURE_MEMORY_IDLE_FRAMES_FAILED : texture_memory.pressure == 1 ?
+		TEXTURE_MEMORY_IDLE_FRAMES_FIRST : TEXTURE_MEMORY_IDLE_FRAMES_AGAIN;
+	dropped = xgpu_texture_cache_drop_idle(frames);
+	if (failed)
+	{
+		/* (what was dropped freed now, not two frames on: the GPU is done
+		with every frame's textures) */
+		gpu_idle_wait();
+		retired_textures_free(0);
+		retired_textures_free(1);
+		for (index = 0; index < texture_memory.failed_count; index++)
+			xgpu_texture_cache_reload(texture_memory.failed[index]);
+		texture_memory.failed_count = 0;
+		texture_memory.failed_overflow = FALSE;
+	}
+	if (dropped && (failed || GetTickCount() - texture_memory.last_log >= 10000))
+	{
+		texture_memory.last_log = GetTickCount();
+		x360_log("gl: dropped %lu textures not drawn in %lu frames (%lu MB of textures, budget %lu MB; %lu MB free)",
+			dropped, frames, bytes_before >> 20, (unsigned long)TEXTURE_MEMORY_BUDGET_MB, free_mb);
+	}
+}
+
 #define RETIRED_TEXTURES_MAXIMUM 256
 
 static struct
@@ -890,6 +1027,8 @@ static void texture_defaults(struct texture *texture)
 
 static void texture_release(struct texture *texture)
 {
+	texture_memory.bytes -= texture->bytes < texture_memory.bytes ? texture->bytes : texture_memory.bytes;
+	texture->bytes = 0;
 	if (texture->phys)
 		x360_phys_account(texture->phys_kind, -(long)texture->phys);
 	texture->phys = 0;
@@ -1000,6 +1139,9 @@ static BOOL texture_allocate(struct texture *texture, GLenum target, GLenum inte
 		return FALSE;
 	}
 	texture_count_phys(texture, phys_before);
+	texture->bytes = texture_bytes_estimate(width, height, target == GL_TEXTURE_3D ? depth : 1, levels,
+		target == GL_TEXTURE_CUBE_MAP ? 6 : 1, compressed, format == (D3DFORMAT)MAKELEFMT(D3DFMT_LIN_DXT1));
+	texture_memory.bytes += texture->bytes;
 	return TRUE;
 }
 
@@ -1113,6 +1255,7 @@ static void image(GLenum target, GLint level, GLint internal, GLsizei width, GLs
 		if (!texture_allocate(texture, whole, (GLenum)internal, (unsigned long)width, (unsigned long)height,
 			(unsigned long)(depth ? depth : 1), console, compressed))
 		{
+			texture_memory_failed(*bound_texture_slot(whole), (unsigned long)width, (unsigned long)height);
 			return;
 		}
 	}
@@ -4346,6 +4489,7 @@ static void x360_gl_swap_timed(void)
 	gl.bound_screen = FALSE;
 	gl.bound_color = (D3DSurface *)1;
 	rings_next_frame();
+	texture_memory_check();
 	stats.frames++;
 	stats.frame_ms += stats_ms_since(stats.frame_start);
 	STATS_NOW(stats.frame_start);
