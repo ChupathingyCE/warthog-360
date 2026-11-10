@@ -62,7 +62,8 @@ and the `shaders` folder.
 - **Online Games:** lists the games online and joins them, dedicated
   servers too. It joins OpenCE's newest servers (network version 41) and
   older ones. Co-op games are listed too, with a filter.
-- **Up to 16 players.** Players past 16 in a bigger game aren't seen.
+- **Up to 32 players.** A game that grows past 32 players is left, as a
+  full one is.
 - **Link your Delta profile:** on Online Games, press **Start**, then **A**
   for a code. Enter it at stats.chupathingy.org/connect, signed in on your
   phone or computer, then press **A** on the console.
@@ -139,7 +140,8 @@ You need:
 Build:
 
 ```sh
-python3 chupathingyce/configure.py --console-port port/xbox360 --console-no-debug-asserts [--xdk360 /path/to/XDK]
+python3 chupathingyce/configure.py --console-port port/xbox360 --console-no-debug-asserts \
+    --console-players 32 [--xdk360 /path/to/XDK]
 ninja xbox360                       # build/xbox360/default.xex
 ```
 
@@ -147,6 +149,8 @@ ninja xbox360                       # build/xbox360/default.xex
 and the original Xbox. It is faster on the console: the debug decomp's
 asserts are compiled out, as the retail game had them, except the memory
 checks. Leave it out for a build that stops at the first failed assert.
+`--console-players 32` is the 32-player build testers get, as on the
+original Xbox. Without it the game's configure builds 16.
 
 Without the toolchain or the SDK, `ninja xbox360` says what is missing.
 `--console-debug-tools` adds the developer tools (the frame profiler, the
