@@ -225,6 +225,10 @@ struct texture
 	D3DSurface *surface;
 	BOOL depth_format;
 	BOOL unresolved;
+	/* a color target's EDRAM tiles; whether another target drew there since
+	(edram_claim), and whether its texture holds pixels a resolve gave it */
+	DWORD edram_base, edram_tiles;
+	BOOL edram_lost, resolved_once;
 	/* physical bytes Direct3D took for d3d (counted by x360_phys_account) */
 	unsigned long phys;
 	int phys_kind;
@@ -1093,9 +1097,12 @@ static void texture_defaults(struct texture *texture)
 	texture->anisotropy = 1.0f;
 }
 
+static void edram_forget(struct texture *texture);
+
 static void texture_release(struct texture *texture)
 {
 	texture_memory_uncount(texture);
+	edram_forget(texture);
 	if (texture->phys)
 		x360_phys_account(texture->phys_kind, -(long)texture->phys);
 	texture->phys = 0;
@@ -1390,6 +1397,105 @@ static void generate_mipmaps(struct texture *texture)
 
 /* ---------- EDRAM: a framebuffer attachment's surface */
 
+/* The color targets in EDRAM. The screen's back buffer, the 3D view's color
+and its depth fill 2,160 of the 2,048 tiles at 1280x720 (the depth shares
+the back buffer's, below), so a further screen-sized target (the scope's
+zoom, the screen effects) has no room of its own. It shares a color
+target's tiles instead: binding either one resolves the other's pixels into
+its texture first, and puts its own back from its texture (edram_claim).
+Before, it got no surface at all, and its draws went into whatever target
+was bound last: the zoom's passes read and wrote the 3D view at once
+(stripes), and the camouflage copy, which the game draws upside down,
+landed in the 3D view. */
+#define EDRAM_TARGETS 64
+static struct texture *edram_targets[EDRAM_TARGETS];
+
+static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
+	float y1, unsigned long width, unsigned long height, BOOL linear);
+static void texture_resolve(struct texture *texture);
+
+static void edram_forget(struct texture *texture)
+{
+	int index;
+
+	for (index = 0; index < EDRAM_TARGETS; index++)
+	{
+		if (edram_targets[index] == texture)
+			edram_targets[index] = NULL;
+	}
+}
+
+static void edram_remember(struct texture *texture)
+{
+	int index;
+
+	for (index = 0; index < EDRAM_TARGETS; index++)
+	{
+		if (!edram_targets[index])
+		{
+			edram_targets[index] = texture;
+			return;
+		}
+	}
+	x360_log("gl: more than %d color targets in EDRAM: the last is not tracked", EDRAM_TARGETS);
+}
+
+/* the color target whose tiles a new one of these tiles shares, when EDRAM
+is full: the smallest that holds it, of those with tiles of their own */
+static struct texture *edram_share(DWORD tiles)
+{
+	struct texture *best = NULL;
+	int index;
+
+	for (index = 0; index < EDRAM_TARGETS; index++)
+	{
+		struct texture *other = edram_targets[index];
+
+		if (other && other->edram_tiles >= tiles && other->edram_base != 0 &&
+			(!best || other->edram_tiles < best->edram_tiles))
+			best = other;
+	}
+	return best;
+}
+
+static BOOL edram_overlap(const struct texture *a, const struct texture *b)
+{
+	return a->edram_base < b->edram_base + b->edram_tiles && b->edram_base < a->edram_base + a->edram_tiles;
+}
+
+/* a color target about to be drawn into: the targets sharing its tiles
+resolved into their textures, and its own pixels put back in EDRAM from its
+texture when another target drew there since. Leaves its surface bound, or
+the binding as it was. */
+static void edram_claim(struct texture *texture)
+{
+	int index;
+
+	if (!texture->surface || texture->depth_format)
+		return;
+	for (index = 0; index < EDRAM_TARGETS; index++)
+	{
+		struct texture *other = edram_targets[index];
+
+		if (!other || other == texture || other->edram_lost || !edram_overlap(texture, other))
+			continue;
+		texture_resolve(other);
+		other->edram_lost = TRUE;
+	}
+	if (!texture->edram_lost)
+		return;
+	texture->edram_lost = FALSE;
+	if (!texture->resolved_once || !texture->d3d)
+		return;
+	IDirect3DDevice9_SetRenderTarget(gl.device, 0, texture->surface);
+	IDirect3DDevice9_SetDepthStencilSurface(gl.device, NULL);
+	gl.bound_screen = FALSE;
+	gl.bound_color = texture->surface;
+	gl.bound_depth = NULL;
+	blit_quad(texture, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, (float)texture->width, (float)texture->height,
+		texture->width, texture->height, FALSE);
+}
+
 static BOOL texture_surface(struct texture *texture)
 {
 	D3DSURFACE_PARAMETERS parameters;
@@ -1404,8 +1510,16 @@ static BOOL texture_surface(struct texture *texture)
 	static BOOL screen_shared;
 	DWORD base = gl.edram_next;
 	DWORD screen_tiles = XGSurfaceSize(1280, 720, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE);
+	struct texture *shared = NULL;
 
-	if (gl.edram_next + tiles > EDRAM_TILES)
+	if (gl.edram_next + tiles > EDRAM_TILES && !texture->depth_format && (shared = edram_share(tiles)) != NULL)
+	{
+		x360_log("gl: EDRAM is full (%lux%lu wants %lu tiles from %lu): this target shares the %lux%lu target's",
+			texture->width, texture->height, (unsigned long)tiles, (unsigned long)gl.edram_next, shared->width,
+			shared->height);
+		base = shared->edram_base;
+	}
+	else if (gl.edram_next + tiles > EDRAM_TILES)
 	{
 		/* (the screen's back buffer is only drawn when a frame is presented,
 		after the game's targets are resolved and the next frame clears
@@ -1436,6 +1550,15 @@ static BOOL texture_surface(struct texture *texture)
 	}
 	if (base == gl.edram_next)
 		gl.edram_next += tiles;
+	if (!texture->depth_format)
+	{
+		texture->edram_base = base;
+		texture->edram_tiles = tiles;
+		/* (a shared target's tiles hold the other's pixels) */
+		texture->edram_lost = shared != NULL;
+		texture->resolved_once = FALSE;
+		edram_remember(texture);
+	}
 	/* (its texels: a texture the resolve can write, tiled) */
 	if (!texture->depth_format)
 	{
@@ -1516,6 +1639,8 @@ static void bind_targets(void)
 		color_surface = color->surface;
 	if (depth && texture_surface(depth))
 		depth_surface = depth->surface;
+	if (color_surface)
+		edram_claim(color);
 	if (gl.bound_screen || color_surface != gl.bound_color || depth_surface != gl.bound_depth)
 	{
 		/* (a target with no color keeps the last one bound: the console
@@ -1553,6 +1678,7 @@ static void texture_resolve(struct texture *texture)
 	point.y = 0;
 	IDirect3DDevice9_Resolve(gl.device, D3DRESOLVE_RENDERTARGET0, &rectangle, texture->d3d, &point, 0, 0, NULL,
 		1.0f, 0, NULL);
+	texture->resolved_once = TRUE;
 	/* the resolve's target stays bound: callers bind theirs again after
 	(bound_color can hold a stand-in that is no surface, never to be bound) */
 	gl.bound_screen = FALSE;

@@ -5,7 +5,9 @@
 #   port/xbox360/tests/run.sh    which hosts the console joins (a Delta host
 #                                by its wire and range, whatever OpenCE
 #                                number it announces), and that the build
-#                                and the game take the Delta path
+#                                and the game take the Delta path, and
+#                                that the GL layer has every function the
+#                                game's renderer loads
 #
 # CC picks the compiler (default: cc). The binaries go to build/xbox360-tests.
 # Run from this repository, with the game in chupathingyce/ (git submodule
@@ -30,6 +32,14 @@ $CC -std=c89 -pedantic -Wall -Wextra -Werror $SAN $CONSOLE \
 	-I$G/port/linux/src -idirafter $G/port/linux/include port/xbox360/tests/delta_join_test.c \
 	$G/port/linux/src/delta_compat.c -o "$OUT/delta_join_test"
 "$OUT/delta_join_test"
+# every GL function the game's renderer loads is in the GL layer's table, or
+# the game stops at gl_functions_load with a black screen (the game's
+# tools/console_gl_check.py; a game from before it has none to run)
+if [ -f "$G/tools/console_gl_check.py" ]; then
+	python3 "$G/tools/console_gl_check.py" port/xbox360/src/x360_gl.c
+else
+	echo "$0: the game has no tools/console_gl_check.py yet: the GL table is not checked"
+fi
 # the build defines HALO_CONSOLE_DELTA, and the game's join check takes the
 # Delta wire path on a console
 grep -q '"-DHALO_CONSOLE_DELTA"' port/xbox360/build.py || {
@@ -39,6 +49,20 @@ grep -q '"-DHALO_CONSOLE_DELTA"' port/xbox360/build.py || {
 grep -q '^#if defined(HALO_GAME_BROWSER) || defined(HALO_CONSOLE_DELTA) || defined(HALO_CONSOLE_ONLINE_GAMES)$' \
 	$G/source/networking/network_client_manager.c || {
 	echo "$0: the game's join check does not take the Delta wire path on the console" >&2
+	exit 1
+}
+# the console's own units (the list's request among them) get the build's
+# players, as the game units do
+grep -q '^        players_flag,$' port/xbox360/build.py || {
+	echo "$0: build.py does not give the console's units HALO_CONSOLE_PLAYERS" >&2
+	exit 1
+}
+# a build of 32 players (configure.py --console-players 32, the tester
+# build) asks the console list for the games of up to 32
+path=$(printf '#include "x360_game_list.h"\nGAME_LIST_PATH\n' |
+	$CC -E -P -DHALO_CONSOLE_PLAYERS=32 -Iport/xbox360/include - | tail -1)
+[ "$path" = '"/v1/console/games?coop=1&packs=1&players=" "32"' ] || {
+	echo "$0: a 32-player build asks the list for $path" >&2
 	exit 1
 }
 echo "$0: ok"

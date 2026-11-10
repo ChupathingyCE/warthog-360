@@ -28,7 +28,8 @@ jobs:
           submodules: true
       - name: Configure, without any console SDK
         run: |
-          python3 chupathingyce/configure.py --console-port port/xbox360
+          python3 chupathingyce/configure.py --console-port port/xbox360 \
+            --console-players 32
           test -f build.ninja
           grep -q "ninja xbox360 needs" build.ninja
       - name: The port's tools compile
