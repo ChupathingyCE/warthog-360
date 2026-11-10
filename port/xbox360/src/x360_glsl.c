@@ -18,7 +18,9 @@ in and out declarations, then functions. That is translated as text:
 - functions: GLSL's names for HLSL's (fract, mix, inversesqrt, texture);
 - NORMPACKED3 attributes, which GLSL unpacks with integer arithmetic shader
   model 3 does not have, arrive unpacked (the vertex declaration's
-  10:11:11 format) and unpack_normpacked3 passes them on.
+  10:11:11 format) and unpack_normpacked3 passes them on;
+- nv2a_finite (the game's xgpu.h), which tests a float's bits, becomes an
+  isnan select.
 */
 
 #include <ctype.h>
@@ -451,6 +453,19 @@ char *x360_glsl_to_hlsl(const char *source, int vertex)
 			const char *rest = skip_function(source, "vec4 unpack_normpacked3(");
 
 			text_append(&body, "float4 unpack_normpacked3(float4 p) { return float4(p.xyz, 1.0); }\n");
+			if (rest)
+				cursor = rest;
+			continue;
+		}
+		if (!strncmp(trimmed, "vec4 nv2a_finite(", 17))
+		{
+			/* (the game's nv2a_finite, xgpu.h, tests a float's bits, which
+			shader model 3 has no integer operations for: here a component
+			that is not a number is made 0 by isnan. An infinite one is kept
+			for the clamps after it, as there) */
+			const char *rest = skip_function(source, "vec4 nv2a_finite(");
+
+			text_append(&body, "float4 nv2a_finite(float4 v) { return isnan(v) ? float4(0.0, 0.0, 0.0, 0.0) : v; }\n");
 			if (rest)
 				cursor = rest;
 			continue;
