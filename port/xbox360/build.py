@@ -511,6 +511,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     # timers and the bring-up logs; off by default, so a normal build shows
     # no debug drawing
     defines = console_defines(sln)
+    players_flag = next(define for define in defines if define.startswith("-DHALO_CONSOLE_PLAYERS="))
     # the game's file names as the game spells them ("source/game/game.c"):
     # the log's and the asserts' names stay the desktop builds'
     file_names = f"-fmacro-prefix-map={_quote(game.as_posix() + '/')}=" if game != Path(".") else ""
@@ -587,6 +588,9 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         "-DHALO_WINDOW_TRANSLATED",
         *CONSOLE_FLAGS,
         *(["-DHALO_CONSOLE_DEBUG_TOOLS"] if getattr(sln, "console_debug_tools", False) else []),
+        # the build's players (--console-players), which the console list's
+        # request asks for (include/x360_game_list.h), as the game units have
+        players_flag,
         version_define,
         f"-I{_quote(posix_include)}",
         f"-I{_quote(windows_posix_include)}",
