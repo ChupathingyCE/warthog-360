@@ -656,3 +656,12 @@ void posix_upnp_stop_forwarding_udp(unsigned short external_port)
 {
 	(void)external_port;
 }
+
+/* ---------- Discord's Join (port/linux/src/p2p_discord.c) */
+
+/* the console has no Discord to tell how to start the game */
+int posix_register_discord_launch(const char *application)
+{
+	(void)application;
+	return 3; /* DISCORD_REGISTER_NONE (port/linux/src/discord_register.h) */
+}
