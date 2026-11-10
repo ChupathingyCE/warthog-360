@@ -41,6 +41,12 @@ grep -q '^#if defined(HALO_GAME_BROWSER) || defined(HALO_CONSOLE_DELTA) || defin
 	echo "$0: the game's join check does not take the Delta wire path on the console" >&2
 	exit 1
 }
+# the console's own units (the list's request among them) get the build's
+# players, as the game units do
+grep -q '^        players_flag,$' port/xbox360/build.py || {
+	echo "$0: build.py does not give the console's units HALO_CONSOLE_PLAYERS" >&2
+	exit 1
+}
 # a build of 32 players (configure.py --console-players 32, the tester
 # build) asks the console list for the games of up to 32
 path=$(printf '#include "x360_game_list.h"\nGAME_LIST_PATH\n' |
