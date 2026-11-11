@@ -30,6 +30,18 @@ source/cseries/xbox_address.h).
 /* the desktop builds' extras left out, as on every console
 (halo_port_features.h): the baseline first, the extras one at a time */
 #define HALO_CONSOLE 1
+/* The debug decomp's developer tools (the profiler, the AI, render and
+collision debug, the stack walker, the bitmap tools, and the files they
+write such as d:\gamestate.txt) are not in the build unless it is
+configured with --console-debug-tools (HALO_CONSOLE_DEBUG_TOOLS), as on
+the original Xbox (warthog-xbox's halo_xbox_features.h). Their modules keep
+their code under #ifndef HALO_CONSOLE_NO_DEBUG_TOOLS and answer their calls
+with stubs; console_debug_tools_unavailable (game/x360_debug_tools.c) says
+so for the console commands and scripts that reach them. */
+#ifndef HALO_CONSOLE_DEBUG_TOOLS
+#define HALO_CONSOLE_NO_DEBUG_TOOLS
+void console_debug_tools_unavailable(char const *name);
+#endif
 
 /* ---------- pointers inside Xbox data */
 
