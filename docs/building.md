@@ -79,7 +79,8 @@ logs.
 ## Smoke test in Xenia
 
 `tools/xenia_smoke.sh` boots the build in Xenia Canary on Linux, to the
-main menu and then into Blood Gulch for 60 seconds.
+main menu and then into Blood Gulch for 60 seconds, with screenshots, and
+fails on a halt, a shader that did not compile, or no frames drawn.
 `tools/xenia_smoke_remote.sh` runs it from a Mac on a Linux machine over
 ssh. [port/xbox360/README.md](../port/xbox360/README.md) has the options
 and what the test works around. A pass in Xenia is not a pass on a
