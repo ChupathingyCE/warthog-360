@@ -17,9 +17,8 @@ Play Chupathingy as homebrew on an Xbox 360, and join the same online games
 as PCs and other consoles.
 
 **Status: early test builds.** Multiplayer is the focus. The campaign isn't
-a goal yet. Earlier builds played Blood Gulch on a real console. The newest
-test build has so far run in the Xenia emulator, where it reaches the main
-menu and plays Blood Gulch.
+a goal yet. Testers play the test builds on real consoles. Builds are also
+checked in the Xenia emulator, to the main menu and a game of Blood Gulch.
 
 Test builds are shared in #xbox-360 on the
 [Discord](https://discord.gg/chupathingy). You can also build it yourself
@@ -54,8 +53,9 @@ This repository holds the Xbox 360 port. The game itself is the
 4. Add the folder to Aurora's content paths, or start `default.xex` from
    your launcher's file browser.
 
-To update, replace `default.xex`. Keep `config.toml`, the `maps` folder
-and the `shaders` folder.
+To update, replace `default.xex`. Keep `config.toml`, the `maps` folder,
+the `shaders` folder and your Delta link files (`delta_device.key`,
+`delta_link.txt`).
 
 ## What works
 
@@ -70,30 +70,41 @@ and the `shaders` folder.
 - **Split screen:** when you join a game in progress, the host waits a few
   seconds for the other players on your console.
 - **Multiplayer maps** load and play offline.
+- **Two renderers.** The default draws through an OpenGL layer. A faster
+  native renderer is being tested ([Settings](#settings)).
 
 ## Known issues
 
 - **Lag**, and the frame rate drops when you shoot at another player
-  ([#11](https://github.com/ChupathingyCE/warthog-360/issues/11)).
-- **A film-grain-like noise** in the picture over time, and HUD and reticle
-  vertices popping.
+  ([#11](https://github.com/ChupathingyCE/warthog-360/issues/11)). A full
+  Halo Universal game drops to a single-digit frame rate
+  ([#40](https://github.com/ChupathingyCE/warthog-360/issues/40)).
+- **Shadows and dark areas** are much darker than on the original Xbox
+  ([#45](https://github.com/ChupathingyCE/warthog-360/issues/45)).
+- **The sniper rifle's trail** draws yellow instead of white
+  ([#52](https://github.com/ChupathingyCE/warthog-360/issues/52)).
+- **Settings and the button layout don't save** from the menus
+  ([#8](https://github.com/ChupathingyCE/warthog-360/issues/8)). Edit
+  `config.toml` instead.
+- **Joining games in progress and OpenCE games** may still fail
+  ([#10](https://github.com/ChupathingyCE/warthog-360/issues/10)).
 - **No movies.** The intro and attract videos are skipped.
-- **The campaign** isn't tested. 343 Guilty Spark and The Silent
-  Cartographer have known drawing problems
+- **The campaign** isn't tested. 343 Guilty Spark is dark and slow
+  ([#16](https://github.com/ChupathingyCE/warthog-360/issues/16)). The
+  Silent Cartographer has drawing problems and can crash
   ([#15](https://github.com/ChupathingyCE/warthog-360/issues/15),
-  [#16](https://github.com/ChupathingyCE/warthog-360/issues/16)).
-- **Not yet checked with the newest build:** scope zoom draws a glitched
-  screen ([#9](https://github.com/ChupathingyCE/warthog-360/issues/9)), a
-  dark shade follows the player on some maps
+  [#46](https://github.com/ChupathingyCE/warthog-360/issues/46)).
+- **The native renderer** is a test. Menus, the HUD and the weapon can be
+  missing, and two-player split screen shows a black screen
+  ([#37](https://github.com/ChupathingyCE/warthog-360/issues/37),
+  [#51](https://github.com/ChupathingyCE/warthog-360/issues/51)).
+- **Not yet checked with the newest build:** a dark shade follows the
+  player on some maps
   ([#12](https://github.com/ChupathingyCE/warthog-360/issues/12)), the blue
   cursor stretches on open maps
-  ([#13](https://github.com/ChupathingyCE/warthog-360/issues/13)), the
+  ([#13](https://github.com/ChupathingyCE/warthog-360/issues/13)), and the
   overshield draws wrong
-  ([#14](https://github.com/ChupathingyCE/warthog-360/issues/14)), settings
-  and the button layout don't save
-  ([#8](https://github.com/ChupathingyCE/warthog-360/issues/8)), joining
-  games in progress and OpenCE games
-  ([#10](https://github.com/ChupathingyCE/warthog-360/issues/10)).
+  ([#14](https://github.com/ChupathingyCE/warthog-360/issues/14)).
 
 ## Reporting problems
 
@@ -104,6 +115,46 @@ and the `shaders` folder.
 3. Tell us in #xbox-360 on the [Discord](https://discord.gg/chupathingy)
    what you were doing, and give the code.
 
+## Troubleshooting
+
+- **The game doesn't start.** Check that `maps\ui.map` is in the game's
+  folder. Start it from Aurora or another launcher, so the folder is
+  writable.
+- **A black screen, or the menus are missing.** Set
+  `display.renderer = "gl"` in `config.toml` and start the game again.
+- **Online Games lists nothing.** Check that the console is online. Check
+  that `network.online` isn't `false` in `config.toml`. Then send
+  `port.txt`: its `net test:` lines show each network step.
+- **A setting doesn't stick.** Change it in `config.toml` over FTP, then
+  restart the game.
+
+## Settings
+
+The settings are in `config.toml` in the game's folder. The first start
+writes it with every setting, commented out at its default. To change one:
+
+1. Copy `config.toml` to your computer, or open it over FTP.
+2. Remove the `# ` in front of the setting and change its value.
+3. Copy it back and restart the game.
+
+These are the 360's own settings:
+
+| Setting | What it does |
+| --- | --- |
+| `display.renderer` | `"gl"` (the default) draws through the OpenGL layer. `"native"` is the console's own renderer, a test. If the native one can't start, the game uses `"gl"`. |
+| `console.native_tiled_textures` | A test for the native renderer: `true` keeps textures in the GPU's tiled layout. Off by default. |
+| `console.native_in_place` | The native renderer reads the map's vertices where they are. `false` copies them each frame instead, to compare when models look broken. On by default. |
+| `console.visibility_test_runs` | Draws the lens flares' visibility tests as one run. The picture is the same. `false` draws each one in full, to compare. On by default. |
+| `console.perf_log` | `true` writes a line to `debug.txt` once a second with the frame time and each part of the frame. For finding what makes a scene slow. |
+| `console.widget_pool_log` | `true` logs each new high in the menus' widget memory. For development. |
+| `console.picture_frame` | For comparing the renderers: saves the picture of this frame number beside the game. `0` (the default) saves none. |
+
+The file also has the PC builds' settings. Game ones work as on a PC: field
+of view, the HUD's timers, chat, the scoreboard, and music and effects
+volume. The window and resolution settings do nothing: the 360 always draws
+at 1280x720. The original Xbox's `[console]` settings, such as
+`bypass_security`, aren't used on the 360.
+
 ## Files in the game's folder
 
 - `config.toml`: the settings, written at the first start.
@@ -111,6 +162,8 @@ and the `shaders` folder.
   console layer's log (also on the debug channel).
 - `shaders`: compiled shaders, kept so each one is compiled once. Deleting
   the folder is safe: they are compiled again.
+- `delta_device.key` and `delta_link.txt`: your Delta link. Keep
+  `delta_device.key` to yourself, and keep both when you update.
 
 [port/xbox360/README.md](port/xbox360/README.md) has the port's details,
 how it draws, the networking and the developer tools.
@@ -153,9 +206,9 @@ checks. Leave it out for a build that stops at the first failed assert.
 original Xbox. Without it the game's configure builds 16.
 
 Without the toolchain or the SDK, `ninja xbox360` says what is missing.
-`--console-debug-tools` adds the developer tools (the frame profiler, the
-GL layer's timers, the bring-up logs and test switches); a normal build has
-none. [docs/building.md](docs/building.md) has every step.
+`--console-debug-tools` adds the developer tools (the debug build's
+profiler and debug data, the GL layer's timers, the bring-up logs and test
+switches). A normal build has none. [docs/building.md](docs/building.md) has every step.
 
 Changes to the game itself go to
 [ChupathingyCE/chupathingyce](https://github.com/ChupathingyCE/chupathingyce)
