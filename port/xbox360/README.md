@@ -63,8 +63,8 @@ From a Mac, run it on a Linux machine you can reach over ssh:
 
 ```sh
 tools/xenia_smoke_remote.sh --host linux-box \
-    --xenia '~/emulators/xenia-canary/xenia_canary' \
-    --maps-root '~/halo-maps/new-data-root.sh'
+    --xenia '~/xenia-canary/xenia_canary' \
+    --maps-root '~/my-maps/make-data-root.sh'
 ```
 
 `XENIA_SMOKE_HOST`, `XENIA_SMOKE_XENIA` and `XENIA_SMOKE_MAPS_ROOT` stand in for the three options. The script copies the build to a new folder on the host, runs the test there, brings the logs back to `build/xbox360/xenia-smoke`, and removes the folder (`--keep` leaves it). `--map`, `--seconds`, `--timeout` and `--shots-every` go to the test.
