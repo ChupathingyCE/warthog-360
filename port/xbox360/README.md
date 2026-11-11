@@ -57,6 +57,8 @@ Put `default.xex` in a folder of its own on the console (`Hdd1:\Games\Warthog360
 
 `tools/xenia_smoke.sh` boots `default.xex` in Xenia Canary (the Linux build) twice: once to the main menu, then straight into Blood Gulch, which it runs for 60 seconds. It needs Xvfb, Vulkan (Mesa's llvmpipe works, slowly), python3, a C compiler, and a script that makes a data root of links to your own maps. The maps are linked, never copied. Xenia's settings, content and cache stay in the test's folder. A pass in Xenia is not a pass on an Xbox 360.
 
+A phase fails on a halt, on Xenia leaving, on the time running out, on a shader that did not compile (`gl: a ... shader did not compile`, or the native renderer's), or when the game reported no frames drawn (its `x360: frame (...)` lines; the map's must come after its scripts are read). Each phase's folder has `result.txt` with the reason, the game's logs, and a screenshot every 15 seconds in `shots/` (`--shots-every`, 0 for none; needs ImageMagick). `summary.txt` has both phases on a line each.
+
 From a Mac, run it on a Linux machine you can reach over ssh:
 
 ```sh
@@ -65,7 +67,7 @@ tools/xenia_smoke_remote.sh --host linux-box \
     --maps-root '~/halo-maps/new-data-root.sh'
 ```
 
-`XENIA_SMOKE_HOST`, `XENIA_SMOKE_XENIA` and `XENIA_SMOKE_MAPS_ROOT` stand in for the three options. The script copies the build to a new folder on the host, runs the test there, brings the logs back to `build/xbox360/xenia-smoke`, and removes the folder (`--keep` leaves it). `--map`, `--seconds` and `--timeout` go to the test.
+`XENIA_SMOKE_HOST`, `XENIA_SMOKE_XENIA` and `XENIA_SMOKE_MAPS_ROOT` stand in for the three options. The script copies the build to a new folder on the host, runs the test there, brings the logs back to `build/xbox360/xenia-smoke`, and removes the folder (`--keep` leaves it). `--map`, `--seconds`, `--timeout` and `--shots-every` go to the test.
 
 What the test works around in Xenia:
 
