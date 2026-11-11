@@ -2682,7 +2682,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 			{
 				struct buffer *buffer = object_get(binding->buffer, _object_buffer);
 				unsigned long stride = (unsigned long)binding->stride;
-				unsigned long bytes;
+				unsigned long bytes, needed;
 				unsigned char *copy;
 
 				if (!buffer || !buffer->data || (unsigned long)binding->offset >= buffer->size)
@@ -2690,6 +2690,13 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 				/* (read where it is: buffers are in memory the GPU reads) */
 				copy = buffer->data + binding->offset;
 				bytes = buffer->size - (unsigned long)binding->offset;
+				/* (the vertices the draw reads, from the base vertex's on: a
+				stream as long as the rest of a big buffer is megabytes the
+				GPU never reads, which Xenia will not map) */
+				needed = stride ? stride * (vertex_end + (draw_base_vertex > 0 ? (unsigned long)draw_base_vertex : 0))
+					: 64;
+				if (!deindex_indices && needed < bytes)
+					bytes = needed;
 				if (deindex_indices)
 				{
 					unsigned long k;
@@ -2726,7 +2733,8 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 				{
 					/* (a stream starts on 4 bytes: an odd one is copied) */
 					again.in_place = FALSE;
-					bytes = stride ? stride * vertex_end : 64;
+					/* (from the buffer's start: the base vertex's are in it) */
+					bytes = needed;
 					if ((unsigned long)binding->offset + bytes > buffer->size)
 						bytes = buffer->size - (unsigned long)binding->offset;
 					copy = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset, bytes);
@@ -2979,6 +2987,10 @@ static void dump_after_draw(unsigned long index)
 	free(linear);
 }
 
+/* a draw's indices less a base below 0 (draw_timed), written in cached
+memory, then copied into the ring */
+static unsigned char folded_indices[0x40000];
+
 static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GLenum index_type,
 	const void *indices, long base_vertex);
 
@@ -3036,6 +3048,7 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 		void *copy;
 		static D3DIndexBuffer index_headers[2];
 		unsigned long index, highest = 0, lowest = ~0UL;
+		BOOL fold_base;
 
 		if (!buffer || !buffer->data || offset + count * index_bytes > buffer->size)
 			return;
@@ -3074,9 +3087,20 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 			targets_written();
 			return;
 		}
+		/* (a base below 0 would start the streams before their buffers,
+		memory the draw never reads but that need not be there: Xenia drops
+		such a draw. The base is taken off the indices instead, when none of
+		them goes below 0) */
+		fold_base = base_vertex < 0 && (long)lowest + base_vertex >= 0 && !debug.index_le &&
+			count * index_bytes <= sizeof(folded_indices);
+		if (fold_base)
+		{
+			lowest = (unsigned long)((long)lowest + base_vertex);
+			highest = (unsigned long)((long)highest + base_vertex);
+		}
 		/* (vertices by index: the base is in the streams' addresses) */
 		vertex_end = highest + 1;
-		draw_base_vertex = base_vertex;
+		draw_base_vertex = fold_base ? 0 : base_vertex;
 		copy = ring_reserve(gl.index_ring, RING_INDEX_SIZE, &gl.index_ring_offset, count * index_bytes);
 		stats.index_ms += stats_ms_since(part);
 		STATS_NOW(part);
@@ -3088,6 +3112,23 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 		stats.vertices_ms += stats_ms_since(part);
 		STATS_NOW(part);
 		draw_base_vertex = 0;
+		if (fold_base)
+		{
+			for (index = 0; index < count; index++)
+			{
+				if (index_bytes == 4)
+					((unsigned long *)folded_indices)[index] =
+						(unsigned long)((long)((const unsigned long *)source)[index] + base_vertex);
+				else
+				{
+					unsigned short value = ((const unsigned short *)source)[index];
+
+					((unsigned short *)folded_indices)[index] =
+						value == 0xffff ? value : (unsigned short)((long)value + base_vertex);
+				}
+			}
+			source = folded_indices;
+		}
 		ring_copy(copy, source, count * index_bytes);
 		XGSetIndexBufferHeader(count * index_bytes, 0, index_bytes == 4 ? D3DFMT_INDEX32 : debug.index_le ? D3DFMT_LE_INDEX16 : D3DFMT_INDEX16, 0,
 			0, &index_headers[gl.frame_half]);
