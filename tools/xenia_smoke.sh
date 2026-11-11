@@ -3,7 +3,7 @@
 # main menu, then boot again straight into a map, run it for a while, and
 # keep the logs.
 #
-#   tools/xenia_smoke.sh --xenia ~/emulators/xenia-canary/xenia_canary --xex build/xbox360/default.xex --out smoke
+#   tools/xenia_smoke.sh --xenia /path/to/xenia_canary --xex build/xbox360/default.xex --out smoke
 #
 # --xenia     xenia_canary from https://github.com/xenia-canary/xenia-canary-releases
 #             (the Linux build). Its settings, content and cache go under
@@ -11,7 +11,7 @@
 # --xex       the build's default.xex
 # --out       where the logs go (one folder a phase), and the scratch data
 # --maps-root the script that makes a data root of links to your own maps
-#             (default ~/halo-maps/new-data-root.sh); the maps are linked,
+#             (default $HALO_DATA_ROOT_SCRIPT); the maps are linked,
 #             never copied, and never written
 # --map       the map the second boot loads (default
 #             levels\test\bloodgulch\bloodgulch)
@@ -56,7 +56,7 @@ set -euo pipefail
 xenia=
 xex=
 out=
-maps_root="$HOME/halo-maps/new-data-root.sh"
+maps_root=${HALO_DATA_ROOT_SCRIPT:-}
 map='levels\test\bloodgulch\bloodgulch'
 seconds=60
 menu_seconds=10
@@ -96,7 +96,7 @@ if [ ! -f "$xex" ]; then
 	exit 2
 fi
 if [ ! -x "$maps_root" ]; then
-	echo "$0: no data root script at $maps_root" >&2
+	echo "$0: no data root script at '$maps_root' (--maps-root or HALO_DATA_ROOT_SCRIPT)" >&2
 	exit 2
 fi
 mkdir -p "$out"
