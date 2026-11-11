@@ -58,10 +58,11 @@ toolchain or the SDK, `ninja xbox360` stops and says what is missing.
 
 | Option | What it does |
 | --- | --- |
-| `--console-debug-tools` | the developer tools: the probe triangle, the frame profiler, the GL layer's timers, the allocation counting, the bring-up logs and the test switches of `game:\gl.txt` |
+| `--console-debug-tools` | the developer tools: the debug build's profiler and its AI, render and collision debug data, the probe triangle, the frame profiler, the GL layer's timers, the allocation counting, the bring-up logs and the test switches of `game:\gl.txt` |
 | `--console-players {16,24,32,64}` | the players the network tables hold. The game's default is 16, the Xbox's; test builds are 32. The online list then asks for games of up to that many (`players=N`), and Delta hears the same count |
 | `--console-no-debug-asserts` | the debug decomp's asserts compiled out, as retail compiled them out, except the memory checks (the tester build) |
 | `--release` | a failed assertion is logged and the game goes on |
+| `--x360-renderer {gl,native}` | `display.renderer`'s default in a new `config.toml`: `gl` (the default) or `native`, the console's own renderer (a test). Either can be set in the file afterwards |
 
 `ninja xbox360-game-objects` and `ninja xbox360-platform-objects` compile
 one half each, without linking.
