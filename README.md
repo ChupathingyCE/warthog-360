@@ -5,7 +5,7 @@
 <p align="center"><b>Chupathingy on the Xbox 360.</b></p>
 
 <p align="center">
-<a href="https://discord.gg/chupathingy">Get the test build (Discord, #xbox-360)</a> ·
+<a href="https://github.com/ChupathingyCE/warthog-360/releases">Get the test build</a> ·
 <a href="https://stats.chupathingy.org">Games online now</a> ·
 <a href="https://github.com/ChupathingyCE/chupathingyce">The game</a> ·
 <a href="https://chupathingy.org">chupathingy.org</a>
@@ -16,13 +16,14 @@
 Play Chupathingy as homebrew on an Xbox 360, and join the same online games
 as PCs and other consoles.
 
-**Status: early test builds.** Multiplayer is the focus. The campaign isn't
-a goal yet. Testers play the test builds on real consoles. Builds are also
-checked in the Xenia emulator, to the main menu and a game of Blood Gulch.
+**Status: early test builds.** Multiplayer is the focus, and testers are
+trying the campaign too. Testers play the test builds on real consoles.
+Builds are also checked in the Xenia emulator, to the main menu and a game
+of Blood Gulch.
 
-Test builds are shared in #xbox-360 on the
-[Discord](https://discord.gg/chupathingy). You can also build it yourself
-(below).
+Get the newest test build from
+[Releases](https://github.com/ChupathingyCE/warthog-360/releases). You can
+also build it yourself (below).
 
 You need your own copy of Halo. No game files or SDK files are included.
 
@@ -44,8 +45,9 @@ This repository holds the Xbox 360 port. The game itself is the
 
 ## Install
 
-1. Get the newest test build from #xbox-360 on the
-   [Discord](https://discord.gg/chupathingy) and unzip it.
+1. Download the newest test build from
+   [Releases](https://github.com/ChupathingyCE/warthog-360/releases) and
+   unzip it.
 2. Copy its folder to the console's hard drive, for example
    `Hdd1:\Games\Warthog360\` (FTP or XBDM).
 3. Put your own Halo maps in its `maps` folder. At least `ui.map` is
@@ -53,14 +55,14 @@ This repository holds the Xbox 360 port. The game itself is the
 4. Add the folder to Aurora's content paths, or start `default.xex` from
    your launcher's file browser.
 
-To update, replace `default.xex`. Keep `config.toml`, the `maps` folder,
-the `shaders` folder and your Delta link files (`delta_device.key`,
-`delta_link.txt`).
+To update, copy the new `default.xex`, `shader_cache.bin` and `shaders`
+folder over the old ones. Keep `config.toml`, the `maps` folder and your
+Delta link files (`delta_device.key`, `delta_link.txt`).
 
 ## What works
 
 - **Online Games:** lists the games online and joins them, dedicated
-  servers too. It joins OpenCE's newest servers (network version 41) and
+  servers too. It joins OpenCE's current servers (network version 44) and
   older ones. Co-op games are listed too, with a filter.
 - **Up to 32 players.** A game that grows past 32 players is left, as a
   full one is.
@@ -75,36 +77,22 @@ the `shaders` folder and your Delta link files (`delta_device.key`,
 
 ## Known issues
 
-- **Lag**, and the frame rate drops when you shoot at another player
-  ([#11](https://github.com/ChupathingyCE/warthog-360/issues/11)). A full
-  Halo Universal game drops to a single-digit frame rate
+- **Lag.** A full Halo Universal game drops to a single-digit frame rate
   ([#40](https://github.com/ChupathingyCE/warthog-360/issues/40)).
 - **Shadows and dark areas** are much darker than on the original Xbox
   ([#45](https://github.com/ChupathingyCE/warthog-360/issues/45)).
-- **The sniper rifle's trail** draws yellow instead of white
-  ([#52](https://github.com/ChupathingyCE/warthog-360/issues/52)).
 - **Settings and the button layout don't save** from the menus
   ([#8](https://github.com/ChupathingyCE/warthog-360/issues/8)). Edit
   `config.toml` instead.
 - **Joining games in progress and OpenCE games** may still fail
   ([#10](https://github.com/ChupathingyCE/warthog-360/issues/10)).
 - **No movies.** The intro and attract videos are skipped.
-- **The campaign** isn't tested. 343 Guilty Spark is dark and slow
-  ([#16](https://github.com/ChupathingyCE/warthog-360/issues/16)). The
-  Silent Cartographer has drawing problems and can crash
-  ([#15](https://github.com/ChupathingyCE/warthog-360/issues/15),
-  [#46](https://github.com/ChupathingyCE/warthog-360/issues/46)).
+- **The campaign** is still being tested. 343 Guilty Spark is dark and
+  slow ([#16](https://github.com/ChupathingyCE/warthog-360/issues/16)).
 - **The native renderer** is a test. Menus, the HUD and the weapon can be
   missing, and two-player split screen shows a black screen
   ([#37](https://github.com/ChupathingyCE/warthog-360/issues/37),
   [#51](https://github.com/ChupathingyCE/warthog-360/issues/51)).
-- **Not yet checked with the newest build:** a dark shade follows the
-  player on some maps
-  ([#12](https://github.com/ChupathingyCE/warthog-360/issues/12)), the blue
-  cursor stretches on open maps
-  ([#13](https://github.com/ChupathingyCE/warthog-360/issues/13)), and the
-  overshield draws wrong
-  ([#14](https://github.com/ChupathingyCE/warthog-360/issues/14)).
 
 ## Reporting problems
 
@@ -160,8 +148,8 @@ at 1280x720. The original Xbox's `[console]` settings, such as
 - `config.toml`: the settings, written at the first start.
 - `debug.txt` and `logs\debug.txt`: the game's log. `port.txt`: the
   console layer's log (also on the debug channel).
-- `shaders`: compiled shaders, kept so each one is compiled once. Deleting
-  the folder is safe: they are compiled again.
+- `shader_cache.bin` and `shaders`: compiled shaders. They come with the
+  build, so the game doesn't stop to compile them in play.
 - `delta_device.key` and `delta_link.txt`: your Delta link. Keep
   `delta_device.key` to yourself, and keep both when you update.
 
@@ -228,9 +216,9 @@ It comes with no warranty. The full text is in [LICENSE](LICENSE).
   released under [CC0 1.0](LICENSES/CC0-1.0.txt) and stays that way.
 - **What Warthog builds on.** The Halo CE decompilation
   ([punpckhdq/halo](https://github.com/punpckhdq/halo) and
-  [bnunu/halo-1](https://github.com/bnunu/halo-1)) and OpenCE are released
-  under CC0 1.0, which lets anyone build on them under any terms. Their
-  repositories stay CC0.
+  [bnunu/halo-1](https://github.com/bnunu/halo-1)) and OpenCE were released
+  under CC0 1.0 when Chupathingy took them, which lets anyone build on them
+  under any terms. Their later work is under their own licenses.
 - **The game** (the `chupathingyce` submodule) is under its own
   repository's license, with its third-party code, fonts and art under
   theirs.
