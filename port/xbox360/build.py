@@ -239,6 +239,9 @@ REPLACED_PLATFORM_SOURCES = {
     # the MCC Workshop packages' preview pictures, read from the host's disk
     # with Win32 calls the console's kernel lacks (x360_mcc_preview.c)
     "posix_mcc_preview.c",
+    # the desktop setup screen's log upload, sent through posix_browser.c
+    # (above); the console has neither
+    "log_send.c",
 }
 
 # the platform layer's units that use the console's HTTPS (the game's
