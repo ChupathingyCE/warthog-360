@@ -67,6 +67,9 @@ BASE_FLAGS = [
     "-fms-compatibility-version=14",
     "-fshort-wchar",
     "-fno-autolink",
+    # the SDK's headers alone: on a Linux host clang would add /usr/include
+    # for this target too (features-time64.h under the C runtime's headers)
+    "-nostdlibinc",
     "-Wno-invalid-token-paste",
     "-D_WIN32",
     "-D_M_PPCBE",
@@ -233,6 +236,12 @@ REPLACED_PLATFORM_SOURCES = {
     # the self-updater: a console is updated with its files
     "updater.c",
     "update_signature.c",
+    # the MCC Workshop packages' preview pictures, read from the host's disk
+    # with Win32 calls the console's kernel lacks (x360_mcc_preview.c)
+    "posix_mcc_preview.c",
+    # the desktop setup screen's log upload, sent through posix_browser.c
+    # (above); the console has neither
+    "log_send.c",
 }
 
 # the platform layer's units that use the console's HTTPS (the game's

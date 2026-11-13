@@ -1,0 +1,130 @@
+name: Build
+
+# Builds the Xbox 360 port on the self-hosted `xbox-sdk` runner, the one
+# machine that holds the Xbox 360 SDK, for every push to main and by hand,
+# and keeps the game's folder (tools/xbox360_package.py --no-maps:
+# default.xex) as the run's artifact. The nightly (nightly.yml) and the
+# release (release.yml) call this one.
+#
+# Never on pull_request: a pull request's workflow file is the pull
+# request's own, and the runner must not run code from a fork. The runner's
+# group (xbox-sdk, in the organization's settings) only takes this file, the
+# nightly's and the release's at refs/heads/main, so a branch cannot use it
+# either. The SDK never leaves the runner: it is not checked out, cached,
+# uploaded, listed or printed here, and the artifact is the package only.
+#
+# The runner's own .env names where its tools are (see docs/building.md):
+#   OXDK_DIR        OXDK, whose xbox360 folder has oxdklink and cxex built
+#   LLVM_XENON_DIR  OXDK's patched LLVM (build/bin/clang, ld.lld)
+#   XDK_DIR         the extracted Xbox 360 SDK (lib/xbox/xboxkrnl.lib)
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      game-ref:
+        description: A commit of the game to build instead of the submodule's (the nightly's; empty, the submodule's)
+        type: string
+        default: ""
+      ref:
+        description: The commit of this repository to build (the release's tag; empty, the run's)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  xbox360:
+    runs-on: [self-hosted, xbox-sdk]
+    timeout-minutes: 60
+    steps:
+      - name: Check the runner
+        run: |
+          for name in OXDK_DIR LLVM_XENON_DIR XDK_DIR; do
+            eval "value=\$$name"
+            if [ -z "$value" ] || [ ! -e "$value" ]; then
+              echo "::error::$name is not set in the runner's .env, or does not exist"
+              exit 1
+            fi
+          done
+          test -x "$OXDK_DIR/xbox360/tools/cxex/cxex" || { echo "::error::OXDK's cxex is not built"; exit 1; }
+          test -x "$LLVM_XENON_DIR/build/bin/clang" || { echo "::error::the patched LLVM is not built"; exit 1; }
+          test -f "$XDK_DIR/lib/xbox/xboxkrnl.lib" || { echo "::error::no SDK at XDK_DIR"; exit 1; }
+          python3 --version; ninja --version; "$LLVM_XENON_DIR/build/bin/clang" --version | head -1
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: true
+
+      # the nightly builds the game's current main without committing it
+      - name: Use the requested game commit
+        env:
+          GAME_REF: ${{ inputs.game-ref }}
+        run: |
+          if [ -n "$GAME_REF" ]; then
+            git -C chupathingyce fetch --depth 1 origin "$GAME_REF"
+            git -C chupathingyce checkout --detach FETCH_HEAD
+            git -C chupathingyce log -1 --oneline
+          fi
+
+      - name: The port's tools compile
+        run: python3 -m py_compile port/xbox360/build.py tools/xbox360_package.py tools/xbox360_stamp.py tools/xdk360_case_links.py
+
+      # Linux is case sensitive and the SDK's file names are not consistent:
+      # lower-case links beside the originals, in the runner's own SDK folder
+      - name: The SDK's file names
+        run: python3 tools/xdk360_case_links.py --xdk "$XDK_DIR" port chupathingyce/source chupathingyce/port/console chupathingyce/port/linux/game
+
+      # (the host's compiler: which hosts the console joins)
+      - name: Host tests
+        run: CC=clang sh port/xbox360/tests/run.sh
+
+      # the build testers get: the debug decomp's asserts compiled out, as the
+      # retail game had them, but for the memory checks, and 32 players
+      - name: Configure
+        run: |
+          python3 chupathingyce/configure.py --console-port port/xbox360 --oxdk360 "$OXDK_DIR/xbox360" \
+            --llvm-xenon "$LLVM_XENON_DIR" --xdk360 "$XDK_DIR" --console-no-debug-asserts --console-players 32
+          if grep -q "ninja xbox360 needs" build.ninja; then
+            echo "::error::configure did not find the toolchain or the SDK"
+            exit 1
+          fi
+
+      # (oxdklink reads LLD for the linker and LLVM_PREFIX for llvm-ar: the
+      # patched LLVM's, built alongside its clang)
+      - name: Build
+        env:
+          LLD: ${{ env.LLVM_XENON_DIR }}/build/bin/ld.lld
+          LLVM_PREFIX: ${{ env.LLVM_XENON_DIR }}/build
+        run: ninja xbox360
+
+      # the game's folder, as a player installs it (without maps); nothing
+      # from the SDK is in it: only the XEX
+      - name: Package
+        run: |
+          rm -rf package
+          python3 tools/xbox360_package.py --no-maps --out package/Warthog
+          cp LICENSE package/Warthog/LICENSE
+          cp port/xbox360/README.md package/Warthog/README.md
+          find package -type f -exec ls -l {} +
+          for file in $(find package -type f); do
+            case "$(basename "$file")" in
+              default.xex|LICENSE|README.md) ;;
+              *) echo "::error::$file is not a file the package may hold"; exit 1 ;;
+            esac
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: warthog-360-${{ github.sha }}
+          path: package
+          if-no-files-found: error
+          retention-days: 7
