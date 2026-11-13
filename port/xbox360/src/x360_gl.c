@@ -47,9 +47,8 @@ the first time.
 
 /* the device calls a frame makes, counted for the log every 10 seconds
 (x360_frame_counters.h); the calls below are the SDK's inline functions */
-#define IDirect3DDevice9_SetRenderState(d, s, v) (X360_COUNT(render_states, 1), D3DDevice_SetRenderState((d), (s), (v)))
-#define IDirect3DDevice9_SetSamplerState(d, n, s, v) (X360_COUNT(sampler_states, 1), \
-	D3DDevice_SetSamplerState((d), (n), (s), (v)))
+#define IDirect3DDevice9_SetRenderState(d, s, v) shadow_render_state((d), (s), (v))
+#define IDirect3DDevice9_SetSamplerState(d, n, s, v) shadow_sampler_state((d), (n), (s), (v))
 #define IDirect3DDevice9_SetTexture(d, n, t) (X360_COUNT(textures, 1), D3DDevice_SetTexture_Inline((d), (n), (t)))
 #define IDirect3DDevice9_SetVertexShaderConstantF(d, r, p, n) (X360_COUNT(vertex_constants, (n)), \
 	D3DDevice_SetVertexShaderConstantF((d), (r), (p), (n)))
@@ -58,6 +57,92 @@ the first time.
 #define IDirect3DDevice9_SetVertexShader(d, v) (X360_COUNT(shaders, 1), D3DDevice_SetVertexShader((d), (v)))
 #define IDirect3DDevice9_SetPixelShader(d, p) (X360_COUNT(shaders, 1), D3DDevice_SetPixelShader((d), (p)))
 #define IDirect3DDevice9_SetVertexDeclaration(d, v) (X360_COUNT(declarations, 1), D3DDevice_SetVertexDeclaration((d), (v)))
+
+/* ---------- the device's state, shadowed
+
+A draw sets every render state and sampler state it needs (apply_render_state,
+apply_sampler), and nearly all of them are what the device has already, the
+last draw's. The SDK's SetRenderState and SetSamplerState each go through a
+call table, so a call that would change nothing is not made. The shadow is
+forgotten at each present (shadow_forget): whatever the device changed on
+its own during a frame is set again in the next one. Textures are not
+shadowed: a texture freed and another made at the same address would look
+the same. */
+#define SHADOW_RENDER_STATES (D3DRS_MAX / 4 + 1)
+#define SHADOW_SAMPLER_STATES (D3DSAMP_MAX / 4 + 1)
+#define SHADOW_SAMPLERS 32
+
+static struct
+{
+	DWORD render_state[SHADOW_RENDER_STATES];
+	unsigned char render_state_known[SHADOW_RENDER_STATES];
+	DWORD sampler_state[SHADOW_SAMPLERS][SHADOW_SAMPLER_STATES];
+	unsigned char sampler_state_known[SHADOW_SAMPLERS][SHADOW_SAMPLER_STATES];
+	D3DVIEWPORT9 viewport;
+	BOOL viewport_known;
+} shadow;
+
+static void shadow_forget(void)
+{
+	memset(&shadow, 0, sizeof(shadow));
+}
+
+static void shadow_render_state(D3DDevice *device, D3DRENDERSTATETYPE state, DWORD value)
+{
+	unsigned long slot = (unsigned long)state / 4;
+
+	if (slot < SHADOW_RENDER_STATES && (unsigned long)state % 4 == 0)
+	{
+		if (shadow.render_state_known[slot] && shadow.render_state[slot] == value)
+			return;
+		shadow.render_state_known[slot] = 1;
+		shadow.render_state[slot] = value;
+	}
+	X360_COUNT(render_states, 1);
+	D3DDevice_SetRenderState(device, state, value);
+}
+
+static void shadow_sampler_state(D3DDevice *device, DWORD sampler, D3DSAMPLERSTATETYPE state, DWORD value)
+{
+	unsigned long slot = (unsigned long)state / 4;
+
+	if (sampler < SHADOW_SAMPLERS && slot < SHADOW_SAMPLER_STATES && (unsigned long)state % 4 == 0)
+	{
+		if (shadow.sampler_state_known[sampler][slot] && shadow.sampler_state[sampler][slot] == value)
+			return;
+		shadow.sampler_state_known[sampler][slot] = 1;
+		shadow.sampler_state[sampler][slot] = value;
+	}
+	X360_COUNT(sampler_states, 1);
+	D3DDevice_SetSamplerState(device, sampler, state, value);
+}
+
+static void shadow_viewport(D3DDevice *device, const D3DVIEWPORT9 *viewport)
+{
+	if (shadow.viewport_known && !memcmp(&shadow.viewport, viewport, sizeof(*viewport)))
+		return;
+	shadow.viewport_known = TRUE;
+	shadow.viewport = *viewport;
+	IDirect3DDevice9_SetViewport(device, viewport);
+}
+
+/* A render target set: the device gives itself the target's whole size as
+its viewport and scissor rectangle, so the viewport the shadow has is no
+longer the device's (the scissor rectangle is set at every draw). Every
+SetRenderTarget and SetDepthStencilSurface below goes through these. */
+static void shadow_render_target(D3DDevice *device, DWORD index, D3DSurface *surface)
+{
+	shadow.viewport_known = FALSE;
+	D3DDevice_SetRenderTarget(device, index, surface);
+}
+
+static void shadow_depth_stencil(D3DDevice *device, D3DSurface *surface)
+{
+	shadow.viewport_known = FALSE;
+	D3DDevice_SetDepthStencilSurface(device, surface);
+}
+#define IDirect3DDevice9_SetRenderTarget(d, i, s) shadow_render_target((d), (i), (s))
+#define IDirect3DDevice9_SetDepthStencilSurface(d, s) shadow_depth_stencil((d), (s))
 #define IDirect3DDevice9_SetStreamSource(d, n, b, o, s) (X360_COUNT(streams, 1), \
 	D3DDevice_SetStreamSource_Inline((d), (n), (b), (o), (s)))
 #define IDirect3DDevice9_SetIndices(d, i) (X360_COUNT(index_buffers, 1), D3DDevice_SetIndices((d), (i)))
@@ -307,6 +392,10 @@ struct program
 	float vertex_constants[256][4];
 	float pixel_constants[256][4];
 	int vertex_constant_count, pixel_constant_count;
+	/* the registers whose values changed since the device last had them
+	(uniform_set; low past high for none): a draw sends those, or all of
+	them when the device holds another program's (constants_program) */
+	int vertex_dirty_low, vertex_dirty_high, pixel_dirty_low, pixel_dirty_high;
 	char log[512];
 	/* deleted while in use (glDeleteProgram): it goes when another is */
 	BOOL deleted;
@@ -1961,6 +2050,35 @@ static void program_uniforms(struct program *program, struct shader *vertex, str
 #define LOCATION_UNIFORM(location) (((location) >> 10) - 1)
 #define LOCATION_ELEMENT(location) ((location) & 1023)
 
+/* the program whose constants the device holds (prepare_draw); NULL when
+it is none that is known */
+static struct program *constants_program;
+
+/* A constant's value in the program's table, and the registers the device
+has still to get. A register set for the first time lies at or past the
+count, and the registers between the count and it have never been set:
+they are zero, as a uniform never set is, and the device must get those
+too (it holds whatever the last program left there), so the dirty range
+runs from the old count. A register set before goes only when its value
+changed. */
+static void constant_set(float constants[256][4], int *count, int *dirty_low, int *dirty_high, int reg,
+	const float vector[4])
+{
+	if (reg >= *count)
+	{
+		if (*count < *dirty_low)
+			*dirty_low = *count;
+		*count = reg + 1;
+	}
+	else if (!memcmp(constants[reg], vector, sizeof(float) * 4))
+		return;
+	else if (reg < *dirty_low)
+		*dirty_low = reg;
+	if (reg > *dirty_high)
+		*dirty_high = reg;
+	memcpy(constants[reg], vector, sizeof(float) * 4);
+}
+
 static void uniform_set(GLint location, const float *values, int vectors, int components)
 {
 	struct program *program = object_get(gl.program, _object_program);
@@ -1983,17 +2101,44 @@ static void uniform_set(GLint location, const float *values, int vectors, int co
 		memcpy(vector, values, sizeof(float) * (size_t)components);
 		if (uniform->vertex_register >= 0 && uniform->vertex_register + element < 256)
 		{
-			memcpy(program->vertex_constants[uniform->vertex_register + element], vector, sizeof(vector));
-			if (uniform->vertex_register + element + 1 > program->vertex_constant_count)
-				program->vertex_constant_count = uniform->vertex_register + element + 1;
+			constant_set(program->vertex_constants, &program->vertex_constant_count, &program->vertex_dirty_low,
+				&program->vertex_dirty_high, uniform->vertex_register + element, vector);
 		}
 		if (uniform->pixel_register >= 0 && uniform->pixel_register + element < 256)
 		{
-			memcpy(program->pixel_constants[uniform->pixel_register + element], vector, sizeof(vector));
-			if (uniform->pixel_register + element + 1 > program->pixel_constant_count)
-				program->pixel_constant_count = uniform->pixel_register + element + 1;
+			constant_set(program->pixel_constants, &program->pixel_constant_count, &program->pixel_dirty_low,
+				&program->pixel_dirty_high, uniform->pixel_register + element, vector);
 		}
 	}
+}
+
+/* the constants a draw needs on the device: all of the program's when the
+device holds another's, else the ones set since the last draw */
+static void constants_apply(struct program *program)
+{
+	if (program != constants_program)
+	{
+		if (program->vertex_constant_count)
+			IDirect3DDevice9_SetVertexShaderConstantF(gl.device, 0, &program->vertex_constants[0][0],
+				(UINT)program->vertex_constant_count);
+		if (program->pixel_constant_count)
+			IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, &program->pixel_constants[0][0],
+				(UINT)program->pixel_constant_count);
+		constants_program = program;
+	}
+	else
+	{
+		if (program->vertex_dirty_low <= program->vertex_dirty_high)
+			IDirect3DDevice9_SetVertexShaderConstantF(gl.device, (UINT)program->vertex_dirty_low,
+				&program->vertex_constants[program->vertex_dirty_low][0],
+				(UINT)(program->vertex_dirty_high - program->vertex_dirty_low + 1));
+		if (program->pixel_dirty_low <= program->pixel_dirty_high)
+			IDirect3DDevice9_SetPixelShaderConstantF(gl.device, (UINT)program->pixel_dirty_low,
+				&program->pixel_constants[program->pixel_dirty_low][0],
+				(UINT)(program->pixel_dirty_high - program->pixel_dirty_low + 1));
+	}
+	program->vertex_dirty_low = program->pixel_dirty_low = 256;
+	program->vertex_dirty_high = program->pixel_dirty_high = -1;
 }
 
 /* ---------- draws */
@@ -2050,16 +2195,24 @@ static unsigned long attribute_bytes(const struct attribute *attribute, BOOL pac
 
 static D3DVertexDeclaration *declaration_get(const D3DVERTEXELEMENT9 *elements, int count)
 {
+	/* (the last one found first: a run of draws shares its layout) */
+	static struct declaration_cache *last;
 	struct declaration_cache *entry;
 
+	if (last && last->count == count && !memcmp(last->elements, elements, sizeof(D3DVERTEXELEMENT9) * (size_t)count))
+		return last->declaration;
 	for (entry = gl.declarations; entry; entry = entry->next)
 	{
 		if (entry->count == count && !memcmp(entry->elements, elements, sizeof(D3DVERTEXELEMENT9) * (size_t)count))
+		{
+			last = entry;
 			return entry->declaration;
+		}
 	}
 	entry = calloc(1, sizeof(*entry));
 	if (!entry)
 		return NULL;
+	last = entry;
 	memcpy(entry->elements, elements, sizeof(D3DVERTEXELEMENT9) * (size_t)count);
 	entry->count = count;
 	{
@@ -2246,7 +2399,7 @@ static void apply_render_state(void)
 	viewport.Height = (DWORD)gl.viewport[3];
 	viewport.MinZ = (float)gl.depth_near;
 	viewport.MaxZ = (float)gl.depth_far;
-	IDirect3DDevice9_SetViewport(device, &viewport);
+	shadow_viewport(device, &viewport);
 }
 
 static void apply_sampler(int sampler_register, struct texture *texture, const struct sampler *sampler)
@@ -2524,12 +2677,7 @@ static BOOL prepare_draw(struct program **program_out, struct shader **vertex_ou
 			program->pixel_constant_count, (void *)gl.bound_color, (void *)gl.bound_depth);
 		draw_log_targets_and_textures(program);
 	}
-	if (program->vertex_constant_count)
-		IDirect3DDevice9_SetVertexShaderConstantF(gl.device, 0, &program->vertex_constants[0][0],
-			(UINT)program->vertex_constant_count);
-	if (program->pixel_constant_count)
-		IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, &program->pixel_constants[0][0],
-			(UINT)program->pixel_constant_count);
+	constants_apply(program);
 	*program_out = program;
 	*vertex_out = vertex;
 	return TRUE;
@@ -2572,22 +2720,31 @@ static struct bound_shader *bound_shaders;
 static D3DVertexShader *vertex_shader_bound(struct shader *shader, D3DVertexDeclaration *declaration,
 	const DWORD *strides, int stream_count)
 {
+	/* (the last one found first: a run of draws shares its shader) */
+	static struct bound_shader *last;
 	struct bound_shader *entry;
 	static unsigned long made;
 
 	if (!shader->code)
 		return NULL;
+	if (last && last->shader == shader && last->declaration == declaration &&
+		!memcmp(last->strides, strides, sizeof(last->strides)))
+	{
+		return last->bound;
+	}
 	for (entry = bound_shaders; entry; entry = entry->next)
 	{
 		if (entry->shader == shader && entry->declaration == declaration &&
 			!memcmp(entry->strides, strides, sizeof(entry->strides)))
 		{
+			last = entry;
 			return entry->bound;
 		}
 	}
 	entry = calloc(1, sizeof(*entry));
 	if (!entry)
 		return NULL;
+	last = entry;
 	entry->shader = shader;
 	entry->declaration = declaration;
 	memcpy(entry->strides, strides, sizeof(entry->strides));
@@ -3324,7 +3481,7 @@ static void blit_quad(struct texture *source, float u0, float v0, float u1, floa
 	viewport.Height = height;
 	viewport.MinZ = 0.0f;
 	viewport.MaxZ = 1.0f;
-	IDirect3DDevice9_SetViewport(gl.device, &viewport);
+	shadow_viewport(gl.device, &viewport);
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_HALFPIXELOFFSET, TRUE);
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ALPHABLENDENABLE, FALSE);
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ZENABLE, FALSE);
@@ -4419,6 +4576,8 @@ static void program_free(GLuint name)
 	objects[name].data = NULL;
 	shader_detach(program->vertex);
 	shader_detach(program->fragment);
+	if (constants_program == program)
+		constants_program = NULL;
 	free(program);
 }
 
@@ -4456,6 +4615,10 @@ static void APIENTRY x360_glLinkProgram(GLuint name)
 	program->linked = vertex && fragment && shader_compile(vertex) && shader_compile(fragment);
 	if (program->linked)
 		program_uniforms(program, vertex, fragment);
+	if (constants_program == program)
+		constants_program = NULL;
+	program->vertex_dirty_low = program->pixel_dirty_low = 256;
+	program->vertex_dirty_high = program->pixel_dirty_high = -1;
 }
 
 static void APIENTRY x360_glGetProgramiv(GLuint name, GLenum parameter, GLint *value)
@@ -4739,6 +4902,7 @@ static void x360_gl_swap_timed(void)
 		}
 	}
 	D3DDevice_Present(gl.device);
+	shadow_forget();
 	gl.bound_screen = FALSE;
 	gl.bound_color = (D3DSurface *)1;
 	rings_next_frame();
