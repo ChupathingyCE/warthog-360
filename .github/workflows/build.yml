@@ -76,7 +76,12 @@ jobs:
           fi
 
       - name: The port's tools compile
-        run: python3 -m py_compile port/xbox360/build.py tools/xbox360_package.py tools/xbox360_stamp.py
+        run: python3 -m py_compile port/xbox360/build.py tools/xbox360_package.py tools/xbox360_stamp.py tools/xdk360_case_links.py
+
+      # Linux is case sensitive and the SDK's file names are not consistent:
+      # lower-case links beside the originals, in the runner's own SDK folder
+      - name: The SDK's file names
+        run: python3 tools/xdk360_case_links.py --xdk "$XDK_DIR" port chupathingyce/source chupathingyce/port/console chupathingyce/port/linux/game
 
       # (the host's compiler: which hosts the console joins)
       - name: Host tests
