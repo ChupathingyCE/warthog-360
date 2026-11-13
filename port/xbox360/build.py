@@ -60,7 +60,13 @@ TARGET_TRIPLE = "powerpc-unknown-none-elf"
 # _MSC_FULL_VER picks the vadefs.h va_start clang implements), _PPC_ and
 # _M_PPCBE select their PowerPC blocks, wchar_t is 16 bits, and the Xenon
 # calling convention is the patched clang's xenon-abi feature
+# On GitHub Actions no diagnostic shows its source line: the SDK's headers
+# warn by the thousand (windef.h's __stdcall) and their text is not for a
+# public log
+CI_DIAGNOSTIC_FLAGS = ["-fno-caret-diagnostics"] if os.environ.get("GITHUB_ACTIONS") else []
+
 BASE_FLAGS = [
+    *CI_DIAGNOSTIC_FLAGS,
     "-target", TARGET_TRIPLE,
     "-fms-extensions",
     "-fms-compatibility",
