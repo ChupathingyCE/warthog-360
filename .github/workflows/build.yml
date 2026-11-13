@@ -98,10 +98,12 @@ jobs:
             exit 1
           fi
 
-      # (oxdklink reads LLD for the linker: the patched LLVM's)
+      # (oxdklink reads LLD for the linker and LLVM_PREFIX for llvm-ar: the
+      # patched LLVM's, built alongside its clang)
       - name: Build
         env:
           LLD: ${{ env.LLVM_XENON_DIR }}/build/bin/ld.lld
+          LLVM_PREFIX: ${{ env.LLVM_XENON_DIR }}/build
         run: ninja xbox360
 
       # the game's folder, as a player installs it (without maps); nothing
