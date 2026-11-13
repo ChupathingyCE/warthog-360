@@ -25,6 +25,16 @@ Deleting the folder starts the cache again.
 
 #define CACHE_FOLDER "game:\\shaders"
 #define CACHE_MAGIC 0x58534331UL /* 'XSC1' */
+/* The cache's version, in every key: the profiles the shaders are
+compiled for, the compiler's options (x360_gl.c shader_compile) and this
+file's layout. The HLSL text keys the generator (x360_glsl.c) by itself: a
+change in what it writes is a new text, so a new key. A file made for
+another version is never looked up, and is compiled over. The cache that
+ships with the build (port/xbox360/shaders, made by
+tools/xbox360_shader_cache.sh) is only as good as this version and the
+game's shaders: whatever is missing or stale is compiled on the console
+as before. Change this when the profiles, the options or the layout do. */
+#define CACHE_VERSION "gl vs_3_0 ps_3_0 flags=0 XSC1"
 /* (a compiled shader is a few KB; anything far larger is not one) */
 #define CACHE_MAXIMUM_BYTES (1024UL * 1024)
 
@@ -54,11 +64,13 @@ static void cache_path(char *path, size_t size, unsigned long long key, int vert
 unsigned long long x360_shader_cache_key(const char *text, int vertex)
 {
 	unsigned long long hash = 14695981039346656037ULL;
-	const unsigned char *at = (const unsigned char *)text;
+	const unsigned char *at = (const unsigned char *)CACHE_VERSION;
 
-	/* (the profile first: vs_3_0 or ps_3_0) */
+	/* (the version, then the profile, vs_3_0 or ps_3_0, then the text) */
+	for (; *at; at++)
+		hash = (hash ^ *at) * 1099511628211ULL;
 	hash = (hash ^ (unsigned char)(vertex ? 'v' : 'p')) * 1099511628211ULL;
-	for (; at && *at; at++)
+	for (at = (const unsigned char *)text; at && *at; at++)
 		hash = (hash ^ *at) * 1099511628211ULL;
 	return hash;
 }
