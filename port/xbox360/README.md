@@ -26,6 +26,8 @@ The game draws with one of two renderers, chosen by `display.renderer` in `game:
 
 `configure.py --x360-renderer native` makes `"native"` the default of a new `config.toml`. Either renderer can be set in the file afterwards.
 
+Shaders are compiled on the console by the SDK's compiler, about 70 ms each, the first time a draw needs one, and kept in `game:\shaders` (`src/x360_shader_cache.c`) so the next run reads them instead. A cache ships with the build so the first run does too: `shaders/` (the compiled shaders, one file each, named by a hash of the HLSL text and the cache's version) and `shader_cache.bin` (the game's own list of the shaders it has drawn with, which it compiles at start-up, so with both in place every shader the list knows is a file read while the game starts, not a compile in the middle of play). `tools/xbox360_shader_cache.sh` makes the cache from a build by running it through every campaign and multiplayer map in Xenia (`tools/xenia_smoke_remote.sh`, one run a map, each boot given the list the last run left) and keeping what the console compiled; it goes in `port/xbox360/shaders`, and `tools/xbox360_package.py` puts it in the game's folder. It is only as good as the build it was made from: a shader whose text or cache version differs is never read and is compiled on the console as before, so a stale cache costs nothing but the compile. Make it again after a change to `src/x360_glsl.c`, to the game's renderer, or to `CACHE_VERSION`.
+
 Every build logs a frame's counts and times every 10 seconds (`src/x360_frame_counters.c`): the frame rate, the time in the game, the renderer and the present, the free memory, and what a frame sets on the device and copies for the GPU.
 
 ## Requirements

@@ -106,17 +106,20 @@ jobs:
         run: LLD="$LLVM_XENON_DIR/build/bin/ld.lld" LLVM_PREFIX="$LLVM_XENON_DIR/build" ninja xbox360
 
       # the game's folder, as a player installs it (without maps); nothing
-      # from the SDK is in it: only the XEX
+      # from the SDK is in it: the XEX, and the shader cache that ships with
+      # the build (port/xbox360/shaders: our own shaders compiled, and the
+      # game's list of them)
       - name: Package
         run: |
           rm -rf package
           python3 tools/xbox360_package.py --no-maps --out package/Warthog
           cp LICENSE package/Warthog/LICENSE
           cp port/xbox360/README.md package/Warthog/README.md
-          find package -type f -exec ls -l {} +
+          find package -type f -exec ls -l {} + | grep -v '/shaders/'
+          echo "shaders: $(find package/Warthog/shaders -type f 2>/dev/null | wc -l)"
           for file in $(find package -type f); do
             case "$(basename "$file")" in
-              default.xex|LICENSE|README.md) ;;
+              default.xex|LICENSE|README.md|shader_cache.bin|*.vsh|*.psh) ;;
               *) echo "::error::$file is not a file the package may hold"; exit 1 ;;
             esac
           done
