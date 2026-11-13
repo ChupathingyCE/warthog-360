@@ -29,6 +29,8 @@ def main() -> int:
     parser.add_argument("--xex", type=Path, default=Path("build/xbox360/default.xex"))
     parser.add_argument("--maps", type=Path, default=Path("assets/maps"), help="the disc's maps folder")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--no-maps", action="store_true",
+                        help="no maps folder: the game only (the builds CI publishes)")
     args = parser.parse_args()
 
     maps = args.maps.expanduser()
@@ -36,15 +38,18 @@ def main() -> int:
     if not args.xex.is_file():
         print(f"no {args.xex}: run ninja xbox360 first", file=sys.stderr)
         return 1
-    files = sorted(maps.glob("*.map")) + [p for p in [maps / "loading.tga"] if p.is_file()]
-    if not any(p.name == "ui.map" for p in files):
-        print(f"no ui.map in {maps}", file=sys.stderr)
-        return 1
-    (out / "maps").mkdir(parents=True, exist_ok=True)
+    files = []
+    if not args.no_maps:
+        files = sorted(maps.glob("*.map")) + [p for p in [maps / "loading.tga"] if p.is_file()]
+        if not any(p.name == "ui.map" for p in files):
+            print(f"no ui.map in {maps}", file=sys.stderr)
+            return 1
+        (out / "maps").mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     shutil.copy2(args.xex, out / "default.xex")
     for path in files:
         place(path, out / "maps" / path.name)
-    print(f"{out}: default.xex and {len(files)} map files")
+    print(f"{out}: default.xex and {'no maps' if args.no_maps else f'{len(files)} map files'}")
     return 0
 
 
