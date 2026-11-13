@@ -125,6 +125,24 @@ static void shadow_viewport(D3DDevice *device, const D3DVIEWPORT9 *viewport)
 	shadow.viewport = *viewport;
 	IDirect3DDevice9_SetViewport(device, viewport);
 }
+
+/* A render target set: the device gives itself the target's whole size as
+its viewport and scissor rectangle, so the viewport the shadow has is no
+longer the device's (the scissor rectangle is set at every draw). Every
+SetRenderTarget and SetDepthStencilSurface below goes through these. */
+static void shadow_render_target(D3DDevice *device, DWORD index, D3DSurface *surface)
+{
+	shadow.viewport_known = FALSE;
+	D3DDevice_SetRenderTarget(device, index, surface);
+}
+
+static void shadow_depth_stencil(D3DDevice *device, D3DSurface *surface)
+{
+	shadow.viewport_known = FALSE;
+	D3DDevice_SetDepthStencilSurface(device, surface);
+}
+#define IDirect3DDevice9_SetRenderTarget(d, i, s) shadow_render_target((d), (i), (s))
+#define IDirect3DDevice9_SetDepthStencilSurface(d, s) shadow_depth_stencil((d), (s))
 #define IDirect3DDevice9_SetStreamSource(d, n, b, o, s) (X360_COUNT(streams, 1), \
 	D3DDevice_SetStreamSource_Inline((d), (n), (b), (o), (s)))
 #define IDirect3DDevice9_SetIndices(d, i) (X360_COUNT(index_buffers, 1), D3DDevice_SetIndices((d), (i)))
@@ -2036,6 +2054,31 @@ static void program_uniforms(struct program *program, struct shader *vertex, str
 it is none that is known */
 static struct program *constants_program;
 
+/* A constant's value in the program's table, and the registers the device
+has still to get. A register set for the first time lies at or past the
+count, and the registers between the count and it have never been set:
+they are zero, as a uniform never set is, and the device must get those
+too (it holds whatever the last program left there), so the dirty range
+runs from the old count. A register set before goes only when its value
+changed. */
+static void constant_set(float constants[256][4], int *count, int *dirty_low, int *dirty_high, int reg,
+	const float vector[4])
+{
+	if (reg >= *count)
+	{
+		if (*count < *dirty_low)
+			*dirty_low = *count;
+		*count = reg + 1;
+	}
+	else if (!memcmp(constants[reg], vector, sizeof(float) * 4))
+		return;
+	else if (reg < *dirty_low)
+		*dirty_low = reg;
+	if (reg > *dirty_high)
+		*dirty_high = reg;
+	memcpy(constants[reg], vector, sizeof(float) * 4);
+}
+
 static void uniform_set(GLint location, const float *values, int vectors, int components)
 {
 	struct program *program = object_get(gl.program, _object_program);
@@ -2058,33 +2101,13 @@ static void uniform_set(GLint location, const float *values, int vectors, int co
 		memcpy(vector, values, sizeof(float) * (size_t)components);
 		if (uniform->vertex_register >= 0 && uniform->vertex_register + element < 256)
 		{
-			int reg = uniform->vertex_register + element;
-
-			if (memcmp(program->vertex_constants[reg], vector, sizeof(vector)) || reg >= program->vertex_constant_count)
-			{
-				memcpy(program->vertex_constants[reg], vector, sizeof(vector));
-				if (reg < program->vertex_dirty_low)
-					program->vertex_dirty_low = reg;
-				if (reg > program->vertex_dirty_high)
-					program->vertex_dirty_high = reg;
-			}
-			if (reg + 1 > program->vertex_constant_count)
-				program->vertex_constant_count = reg + 1;
+			constant_set(program->vertex_constants, &program->vertex_constant_count, &program->vertex_dirty_low,
+				&program->vertex_dirty_high, uniform->vertex_register + element, vector);
 		}
 		if (uniform->pixel_register >= 0 && uniform->pixel_register + element < 256)
 		{
-			int reg = uniform->pixel_register + element;
-
-			if (memcmp(program->pixel_constants[reg], vector, sizeof(vector)) || reg >= program->pixel_constant_count)
-			{
-				memcpy(program->pixel_constants[reg], vector, sizeof(vector));
-				if (reg < program->pixel_dirty_low)
-					program->pixel_dirty_low = reg;
-				if (reg > program->pixel_dirty_high)
-					program->pixel_dirty_high = reg;
-			}
-			if (reg + 1 > program->pixel_constant_count)
-				program->pixel_constant_count = reg + 1;
+			constant_set(program->pixel_constants, &program->pixel_constant_count, &program->pixel_dirty_low,
+				&program->pixel_dirty_high, uniform->pixel_register + element, vector);
 		}
 	}
 }
