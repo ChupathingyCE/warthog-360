@@ -32,6 +32,10 @@ $CC -std=c89 -pedantic -Wall -Wextra -Werror $SAN $CONSOLE \
 	-I$G/port/linux/src -idirafter $G/port/linux/include port/xbox360/tests/delta_join_test.c \
 	$G/port/linux/src/delta_compat.c -o "$OUT/delta_join_test"
 "$OUT/delta_join_test"
+# the table of the window's memory the GPU reads in place (x360_gpu_reads.c)
+$CC -std=c89 -pedantic -Wall -Wextra -Werror $SAN port/xbox360/tests/gpu_reads_test.c \
+	port/xbox360/src/x360_gpu_reads.c -o "$OUT/gpu_reads_test"
+"$OUT/gpu_reads_test"
 # every GL function the game's renderer loads is in the GL layer's table, or
 # the game stops at gl_functions_load with a black screen (the game's
 # tools/console_gl_check.py; a game from before it has none to run)

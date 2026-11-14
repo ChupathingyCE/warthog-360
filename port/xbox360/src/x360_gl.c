@@ -44,6 +44,7 @@ the first time.
 #include "x360_port.h"
 #include "x360_glsl.h"
 #include "x360_frame_counters.h"
+#include "x360_gpu_reads.h"
 
 /* the device calls a frame makes, counted for the log every 10 seconds
 (x360_frame_counters.h); the calls below are the SDK's inline functions */
@@ -525,6 +526,8 @@ static struct
 	unsigned long vertex_ring_offset, index_ring_offset;
 	DWORD frame_fences[2];
 	int frame_half;
+	/* the frame being built, from 1 (never 0 in its low 16 bits: x360_gpu_reads.h) */
+	unsigned long frame_number;
 	/* vertex declarations made */
 	struct declaration_cache *declarations;
 	/* the present blit's shaders */
@@ -588,6 +591,7 @@ static BOOL gl_ready(void)
 	if (!gl.device)
 		return FALSE;
 	state_defaults();
+	gl.frame_number = 1;
 	gl.vertex_ring = x360_phys_alloc(X360_PHYS_OTHER, RING_VERTEX_SIZE, PAGE_READWRITE | PAGE_WRITECOMBINE);
 	gl.index_ring = x360_phys_alloc(X360_PHYS_OTHER, RING_INDEX_SIZE, PAGE_READWRITE | PAGE_WRITECOMBINE);
 	if (!gl.vertex_ring || !gl.index_ring)
@@ -1150,6 +1154,79 @@ static void rings_next_frame(void)
 	}
 	gl.vertex_ring_offset = gl.frame_half * (RING_VERTEX_SIZE / 2);
 	gl.index_ring_offset = gl.frame_half * (RING_INDEX_SIZE / 2);
+	gl.frame_number++;
+	if (!(unsigned short)gl.frame_number)
+		gl.frame_number++;
+}
+
+/* ---------- the window's memory read in place (x360_gpu_reads.h)
+
+The game's D3D8 layer asks about a resource before a lock writes it
+(halo_resource_busy and halo_resource_wait, xbox360_gpu_hooks.c): busy
+while a frame whose draws read it in place is not through on the GPU. The
+frame being built always is; the last frame is until its fence has passed;
+older frames were waited for when their ring half was taken again
+(rings_next_frame). */
+
+extern unsigned int xbox_address_space_base;
+
+static unsigned long window_offset(const void *data)
+{
+	return (unsigned long)((unsigned int)(UINT_PTR)data - xbox_address_space_base) - 0x80000000UL;
+}
+
+static void reads_mark(const void *data, unsigned long size)
+{
+	x360_gpu_reads_mark(window_offset(data), size, (unsigned short)gl.frame_number);
+}
+
+BOOL x360_gl_active(void)
+{
+	return gl.device != NULL;
+}
+
+unsigned long x360_gl_memory_read_frame(const void *data, unsigned long size)
+{
+	return x360_gpu_reads_newest(window_offset(data), size, (unsigned short)gl.frame_number);
+}
+
+BOOL x360_gl_frame_done(unsigned long frame)
+{
+	unsigned short current = (unsigned short)gl.frame_number;
+
+	if (!frame || !gl.device)
+		return TRUE;
+	if ((unsigned short)frame == current)
+		return FALSE;
+	if ((unsigned short)frame == (unsigned short)(current - 1))
+	{
+		DWORD fence = gl.frame_fences[gl.frame_half ^ 1];
+
+		return !fence || !D3DDevice_IsFencePending(fence);
+	}
+	return TRUE;
+}
+
+void x360_gl_frame_wait(unsigned long frame)
+{
+	LARGE_INTEGER start;
+
+	if (x360_gl_frame_done(frame))
+		return;
+	STATS_NOW(start);
+	if ((unsigned short)frame == (unsigned short)gl.frame_number)
+	{
+		/* (this frame's draws so far) */
+		DWORD fence = IDirect3DDevice9_InsertFence(gl.device);
+
+		if (fence)
+			D3DDevice_BlockOnFence(fence);
+	}
+	else
+		D3DDevice_BlockOnFence(gl.frame_fences[gl.frame_half ^ 1]);
+	stats.fence_waits++;
+	stats.fence_wait_ms += stats_ms_since(start);
+	X360_COUNT(lock_waits, 1);
 }
 
 /* ---------- textures */
@@ -2898,6 +2975,12 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 					if (!copy)
 						return FALSE;
 					ring_copy(copy, buffer->data + binding->offset, bytes);
+				}
+				else if (buffer->alias)
+				{
+					/* (read in place: the GPU may still be reading it when the
+					game next writes it, which a lock of it asks about) */
+					reads_mark(copy, bytes);
 				}
 				if (draw_base_vertex && !deindex_indices)
 				{
