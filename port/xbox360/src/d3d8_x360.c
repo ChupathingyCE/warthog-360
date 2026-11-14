@@ -176,6 +176,11 @@ static struct
 	D3DVertexShader *blit_vertex;
 	D3DPixelShader *blit_pixel;
 	D3DVertexDeclaration *blit_declaration;
+	/* a clear of some color channels: a quad of the clear color, each
+	vertex carrying it */
+	D3DVertexShader *fill_vertex;
+	D3DPixelShader *fill_pixel;
+	D3DVertexDeclaration *fill_declaration;
 	/* resources released two frames on */
 	struct
 	{
@@ -319,6 +324,12 @@ static const char blit_vertex_source[] =
 static const char blit_pixel_source[] =
 	"sampler2D source : register(s0);\n"
 	"float4 main(float2 uv : TEXCOORD0) : COLOR { return float4(tex2D(source, uv).rgb, 1.0); }\n";
+static const char fill_vertex_source[] =
+	"struct output { float4 position : POSITION; float4 color : TEXCOORD0; };\n"
+	"output main(float4 position : POSITION, float4 color : TEXCOORD0)\n"
+	"{ output result; result.position = position; result.color = color; return result; }\n";
+static const char fill_pixel_source[] =
+	"float4 main(float4 color : TEXCOORD0) : COLOR { return color; }\n";
 
 int console_renderer_initialize(void)
 {
@@ -359,6 +370,31 @@ int console_renderer_initialize(void)
 
 		x.blit_declaration = D3DDevice_CreateVertexDeclaration(elements);
 	}
+	code = x360_video_compile(fill_vertex_source, "vs_3_0", NULL);
+	if (code)
+	{
+		x.fill_vertex = D3DDevice_CreateVertexShader(x360_video_shader_code(code));
+		x360_video_shader_free(code);
+	}
+	code = x360_video_compile(fill_pixel_source, "ps_3_0", NULL);
+	if (code)
+	{
+		x.fill_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
+		x360_video_shader_free(code);
+	}
+	{
+		static const D3DVERTEXELEMENT9 elements[] =
+		{
+			{ 0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0 },
+			{ 0, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 },
+			D3DDECL_END()
+		};
+
+		x.fill_declaration = D3DDevice_CreateVertexDeclaration(elements);
+	}
+	/* (without them a clear of some channels clears all four, as before) */
+	if (!x.fill_vertex || !x.fill_pixel || !x.fill_declaration)
+		x360_log("native: cannot make the masked clear's shaders: such clears clear every channel");
 	if (!x.blit_vertex || !x.blit_pixel || !x.blit_declaration)
 	{
 		x360_log("native: cannot make the present's shaders");
@@ -1304,10 +1340,93 @@ void console_draw(const struct console_draw *draw)
 	DEVICE_TIME_END();
 }
 
+/* the device state the draws expect set again after the fill's own */
+static void state_forget(void)
+{
+	int index;
+
+	x.state_known = FALSE;
+	for (index = 0; index < SAMPLERS; index++)
+		x.samplers_known[index] = FALSE;
+	x.declaration = NULL;
+	x.vertex_shader = NULL;
+	x.pixel_shader = NULL;
+	x.last_layout = NULL;
+}
+
+/* the rectangles' pixels of the color target set to the color in the
+channels named (D3DCOLORWRITEENABLE bits) alone: the device's clear has no
+channel mask, so a quad of the color is drawn under one. The fog screen
+clears the 3D view's alpha alone, to draw its density there; a whole clear
+wiped the picture black (c10, c20, d20) */
+static BOOL fill_masked(DWORD write, const D3DVECTOR4 *color, const unsigned long *rectangles,
+	unsigned long rectangle_count)
+{
+	float *quad;
+	unsigned long index;
+	int corner;
+
+	if (!x.fill_vertex || !x.fill_pixel || !x.fill_declaration)
+		return FALSE;
+	quad = console_frame_copy(NULL, 4 * 8 * sizeof(float));
+	if (!quad)
+		return FALSE;
+	{
+		float corners[4][8];
+
+		for (corner = 0; corner < 4; corner++)
+		{
+			corners[corner][0] = (corner == 1 || corner == 2) ? 1.0f : -1.0f;
+			corners[corner][1] = corner < 2 ? 1.0f : -1.0f;
+			corners[corner][2] = 0.0f;
+			corners[corner][3] = 1.0f;
+			corners[corner][4] = color->x;
+			corners[corner][5] = color->y;
+			corners[corner][6] = color->z;
+			corners[corner][7] = color->w;
+		}
+		copy_words((unsigned long *)quad, corners, sizeof(corners));
+	}
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_ALPHABLENDENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_ALPHATESTENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_ZENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_ZWRITEENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_STENCILENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_CULLMODE, D3DCULL_NONE);
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_FILLMODE, D3DFILL_SOLID);
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_COLORWRITEENABLE, write);
+	IDirect3DDevice9_SetRenderState(x.device, D3DRS_SCISSORTESTENABLE, FALSE);
+	IDirect3DDevice9_SetVertexDeclaration(x.device, x.fill_declaration);
+	IDirect3DDevice9_SetVertexShader(x.device, x.fill_vertex);
+	IDirect3DDevice9_SetPixelShader(x.device, x.fill_pixel);
+	/* (floats written by this processor: its byte order, the default) */
+	XGSetVertexBufferHeader(4 * 8 * sizeof(float), 0, 0, 0, &x.streams[0]);
+	XGOffsetResourceAddress((D3DResource *)&x.streams[0], quad);
+	IDirect3DDevice9_SetStreamSource(x.device, 0, &x.streams[0], 0, 8 * sizeof(float));
+	for (index = 0; index < rectangle_count; index++)
+	{
+		const unsigned long *rect = rectangles + index * 4;
+		D3DVIEWPORT9 viewport;
+
+		viewport.X = (DWORD)rect[0];
+		viewport.Y = (DWORD)rect[1];
+		viewport.Width = (DWORD)rect[2];
+		viewport.Height = (DWORD)rect[3];
+		viewport.MinZ = 0.0f;
+		viewport.MaxZ = 1.0f;
+		IDirect3DDevice9_SetViewport(x.device, &viewport);
+		IDirect3DDevice9_DrawVertices(x.device, D3DPT_QUADLIST, 0, 4);
+		X360_COUNT(clears, 1);
+	}
+	state_forget();
+	return TRUE;
+}
+
 void console_clear(unsigned long flags, const unsigned long *rectangles, unsigned long rectangle_count,
 	unsigned long color, float depth, unsigned long stencil)
 {
 	DWORD clear = 0;
+	DWORD write = 0;
 	D3DVECTOR4 value;
 	unsigned long index;
 	DEVICE_TIME_BEGIN();
@@ -1315,6 +1434,12 @@ void console_clear(unsigned long flags, const unsigned long *rectangles, unsigne
 	if (!x.ready)
 		return;
 	targets_bind();
+	/* (the channels named, console_renderer.h: none named is all four) */
+	if (flags & 0xF0)
+	{
+		write = ((flags & 0x10) ? D3DCOLORWRITEENABLE_RED : 0) | ((flags & 0x20) ? D3DCOLORWRITEENABLE_GREEN : 0) |
+			((flags & 0x40) ? D3DCOLORWRITEENABLE_BLUE : 0) | ((flags & 0x80) ? D3DCOLORWRITEENABLE_ALPHA : 0);
+	}
 	if ((flags & 1) && x.color)
 		clear |= D3DCLEAR_TARGET;
 	if ((flags & 2) && x.depth)
@@ -1327,6 +1452,16 @@ void console_clear(unsigned long flags, const unsigned long *rectangles, unsigne
 	value.y = (float)((color >> 8) & 0xff) / 255.0f;
 	value.z = (float)(color & 0xff) / 255.0f;
 	value.w = (float)((color >> 24) & 0xff) / 255.0f;
+	if ((clear & D3DCLEAR_TARGET) && write && write != 0xF && fill_masked(write, &value, rectangles, rectangle_count))
+	{
+		x.color->unresolved = TRUE;
+		clear &= ~D3DCLEAR_TARGET;
+		if (!clear)
+		{
+			DEVICE_TIME_END();
+			return;
+		}
+	}
 	/* (the console clears whole tiles of the rectangle; the scissor
 	is off for it) */
 	IDirect3DDevice9_SetRenderState(x.device, D3DRS_SCISSORTESTENABLE, FALSE);
@@ -1496,7 +1631,6 @@ void console_present(struct console_target *picture)
 	unsigned long long ticks = x360_ticks();
 	D3DSurface *back_buffer = NULL;
 	float *quad;
-	int index;
 
 	if (!x.ready)
 		return;
@@ -1552,13 +1686,7 @@ void console_present(struct console_target *picture)
 	D3DDevice_Present(x.device);
 	/* (what the present's quad set is the device's: everything is set
 	again for the next draw) */
-	x.state_known = FALSE;
-	for (index = 0; index < SAMPLERS; index++)
-		x.samplers_known[index] = FALSE;
-	x.declaration = NULL;
-	x.vertex_shader = NULL;
-	x.pixel_shader = NULL;
-	x.last_layout = NULL;
+	state_forget();
 	frame_next();
 	x.frame++;
 	x360_frame_counters.present_ticks += x360_ticks() - ticks;
