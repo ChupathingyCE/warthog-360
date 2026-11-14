@@ -41,6 +41,7 @@ How the Xbox's model meets the console's:
 #include "x360_port.h"
 #include "x360_glsl.h"
 #include "x360_frame_counters.h"
+#include "x360_gpu_reads.h"
 #include "../../../chupathingyce/port/linux/include/console_renderer.h"
 
 /* (d3dx9mesh.h's: the drive's shader cache hands its bytes over in one) */
@@ -1133,10 +1134,13 @@ static void fetch_little_endian(D3DVertexBuffer *stream)
 	stream->Format.dword[1] = (stream->Format.dword[1] & ~3UL) | GPUENDIAN_NONE;
 }
 
+static void reads_mark(const void *data, unsigned long size);
+
 static void stream_set(UINT index, const void *data, unsigned long size, unsigned long stride, BOOL little_endian)
 {
 	D3DVertexBuffer *header = &x.streams[index];
 
+	reads_mark(data, size);
 	XGSetVertexBufferHeader(size ? size : 4, 0, 0, 0, header);
 	XGOffsetResourceAddress((D3DResource *)header, (void *)data);
 	if (little_endian)
@@ -1288,6 +1292,7 @@ void console_draw(const struct console_draw *draw)
 	{
 		XGSetIndexBufferHeader(draw->index_count * 2, 0, D3DFMT_INDEX16, 0, 0, &x.indices);
 		XGOffsetResourceAddress((D3DResource *)&x.indices, (void *)draw->indices);
+		reads_mark(draw->indices, draw->index_count * 2);
 		IDirect3DDevice9_SetIndices(x.device, &x.indices);
 		X360_COUNT(index_buffers, 1);
 		if (!draw->indices_resident)
@@ -1434,6 +1439,76 @@ int console_query_result(unsigned long slot, unsigned long *samples)
 	x.slots[slot].count = (unsigned char)(x.slots[slot].count - newest - 1);
 	*samples = newest_result;
 	return 1;
+}
+
+/* ---------- the game's memory read in place (x360_gpu_reads.h)
+
+The renderer draws the game's vertices and indices where they are, so the
+game's locks ask whether a frame that read them is still in flight
+(xbox360_gpu_hooks.c, as for the GL layer): this frame always, the last
+until its fence has passed. The frame being built is x.frame + 1 (x.frame
+counts the presented ones). */
+
+extern unsigned int xbox_address_space_base;
+
+static unsigned long window_offset(const void *data)
+{
+	return (unsigned long)((unsigned int)(UINT_PTR)data - xbox_address_space_base) - 0x80000000UL;
+}
+
+static unsigned short frame_being_built(void)
+{
+	unsigned short frame = (unsigned short)(x.frame + 1);
+
+	return frame ? frame : 1;
+}
+
+static void reads_mark(const void *data, unsigned long size)
+{
+	x360_gpu_reads_mark(window_offset(data), size, frame_being_built());
+}
+
+BOOL x360_native_active(void)
+{
+	return x.device != NULL;
+}
+
+unsigned long x360_native_memory_read_frame(const void *data, unsigned long size)
+{
+	return x360_gpu_reads_newest(window_offset(data), size, frame_being_built());
+}
+
+BOOL x360_native_frame_done(unsigned long frame)
+{
+	unsigned short current = frame_being_built();
+
+	if (!frame || !x.device)
+		return TRUE;
+	if ((unsigned short)frame == current)
+		return FALSE;
+	if ((unsigned short)frame == (unsigned short)(current - 1))
+	{
+		DWORD fence = x.fences[x.half ^ 1];
+
+		return !fence || !D3DDevice_IsFencePending(fence);
+	}
+	return TRUE;
+}
+
+void x360_native_frame_wait(unsigned long frame)
+{
+	if (x360_native_frame_done(frame))
+		return;
+	if ((unsigned short)frame == frame_being_built())
+	{
+		DWORD fence = IDirect3DDevice9_InsertFence(x.device);
+
+		if (fence)
+			D3DDevice_BlockOnFence(fence);
+	}
+	else
+		D3DDevice_BlockOnFence(x.fences[x.half ^ 1]);
+	X360_COUNT(lock_waits, 1);
 }
 
 /* ---------- the frame */

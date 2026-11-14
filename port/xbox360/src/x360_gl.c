@@ -1180,6 +1180,11 @@ static void reads_mark(const void *data, unsigned long size)
 	x360_gpu_reads_mark(window_offset(data), size, (unsigned short)gl.frame_number);
 }
 
+BOOL x360_gl_active(void)
+{
+	return gl.device != NULL;
+}
+
 unsigned long x360_gl_memory_read_frame(const void *data, unsigned long size)
 {
 	return x360_gpu_reads_newest(window_offset(data), size, (unsigned short)gl.frame_number);

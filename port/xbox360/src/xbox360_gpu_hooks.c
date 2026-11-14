@@ -15,9 +15,42 @@ Switch's renderer stamps it: the rename ring probes with a Lock alone.
 
 #include "x360_frame_counters.h"
 
+/* the GL layer's (x360_gl.c) and the native renderer's (d3d8_x360.c): one
+of them is up */
+BOOL x360_gl_active(void);
 unsigned long x360_gl_memory_read_frame(const void *data, unsigned long size);
 BOOL x360_gl_frame_done(unsigned long frame);
 void x360_gl_frame_wait(unsigned long frame);
+BOOL x360_native_active(void);
+unsigned long x360_native_memory_read_frame(const void *data, unsigned long size);
+BOOL x360_native_frame_done(unsigned long frame);
+void x360_native_frame_wait(unsigned long frame);
+
+static unsigned long memory_read_frame(const void *data, unsigned long size)
+{
+	if (x360_gl_active())
+		return x360_gl_memory_read_frame(data, size);
+	if (x360_native_active())
+		return x360_native_memory_read_frame(data, size);
+	return 0;
+}
+
+static BOOL frame_done(unsigned long frame)
+{
+	if (x360_gl_active())
+		return x360_gl_frame_done(frame);
+	if (x360_native_active())
+		return x360_native_frame_done(frame);
+	return TRUE;
+}
+
+static void frame_wait(unsigned long frame)
+{
+	if (x360_gl_active())
+		x360_gl_frame_wait(frame);
+	else if (x360_native_active())
+		x360_native_frame_wait(frame);
+}
 
 BOOL halo_resource_busy(D3DResource *resource)
 {
@@ -30,7 +63,7 @@ BOOL halo_resource_busy(D3DResource *resource)
 		void *data = PLATFORM_PHYSICAL_TO_VIRTUAL(resource->Data);
 		unsigned long size = platform_contiguous_block_size(data);
 
-		frame = size ? x360_gl_memory_read_frame(data, size) : 0;
+		frame = size ? memory_read_frame(data, size) : 0;
 		resource->Lock = frame;
 		X360_COUNT(lock_asked, 1);
 		if (frame)
@@ -38,7 +71,7 @@ BOOL halo_resource_busy(D3DResource *resource)
 	}
 	else
 		frame = resource->Lock;
-	if (!frame || x360_gl_frame_done(frame))
+	if (!frame || frame_done(frame))
 		return FALSE;
 	X360_COUNT(lock_busy, 1);
 	return TRUE;
@@ -47,5 +80,5 @@ BOOL halo_resource_busy(D3DResource *resource)
 void halo_resource_wait(D3DResource *resource)
 {
 	if (halo_resource_busy(resource))
-		x360_gl_frame_wait(resource->Lock);
+		frame_wait(resource->Lock);
 }
