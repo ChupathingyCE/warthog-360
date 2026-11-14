@@ -536,6 +536,7 @@ static struct
 	/* the present's, with display.gamma (gl.gamma_power = 1 / gamma; 0 until read) */
 	D3DPixelShader *blit_gamma_pixel;
 	float gamma_power;
+	D3DPixelShader *fill_pixel;
 	D3DPixelShader *green_pixel;
 	D3DVertexShader *simple_vertex, *topdown_vertex;
 	struct texture *presented;
@@ -580,6 +581,12 @@ static const char blit_vertex_source[] =
 	"struct output { float4 position : POSITION; float2 uv : TEXCOORD0; };\n"
 	"output main(float4 position : POSITION, float2 uv : TEXCOORD0)\n"
 	"{ output result; result.position = position; result.uv = uv; return result; }\n";
+/* a clear of some color channels (the fog screen's of alpha alone): a quad
+of the clear color (c0) drawn under the color write mask, since the
+console's clear has no mask */
+static const char fill_pixel_source[] =
+	"float4 color : register(c0);\n"
+	"float4 main(float2 uv : TEXCOORD0) : COLOR { return color; }\n";
 static const char blit_pixel_source[] =
 	"sampler2D source : register(s0);\n"
 	"float4 main(float2 uv : TEXCOORD0) : COLOR { return tex2D(source, uv); }\n";
@@ -651,6 +658,12 @@ static BOOL gl_ready(void)
 	if (code)
 	{
 		gl.blit_gamma_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
+		x360_video_shader_free(code);
+	}
+	code = x360_video_compile(fill_pixel_source, "ps_3_0", NULL);
+	if (code)
+	{
+		gl.fill_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
 		x360_video_shader_free(code);
 	}
 	{
@@ -4082,9 +4095,72 @@ static void APIENTRY x360_glFramebufferRenderbuffer(GLenum target, GLenum attach
 	(void)target; (void)attachment; (void)renderbuffer_target; (void)renderbuffer;
 }
 
+/* The color channels the color mask lets through filled with a color: a
+quad over the bound target under D3DRS_COLORWRITEENABLE, the scissor kept
+(the console's clear writes every channel: the fog screen clears the 3D
+view's alpha alone before it draws the fog's density into it, and a whole
+clear wiped the view to black on The Library and the swamp levels). The
+states it sets are forgotten by the shadow, so the next draw sends its own. */
+static void fill_masked(const D3DVECTOR4 *color, unsigned long width, unsigned long height)
+{
+	float vertices[4][6];
+	int corner;
+	D3DVIEWPORT9 viewport;
+	DWORD write = (gl.color_mask[0] ? D3DCOLORWRITEENABLE_RED : 0) | (gl.color_mask[1] ? D3DCOLORWRITEENABLE_GREEN : 0) |
+		(gl.color_mask[2] ? D3DCOLORWRITEENABLE_BLUE : 0) | (gl.color_mask[3] ? D3DCOLORWRITEENABLE_ALPHA : 0);
+
+	again.valid = FALSE;
+	if (!gl.blit_vertex || !gl.fill_pixel || !gl.blit_declaration || !write)
+		return;
+	for (corner = 0; corner < 4; corner++)
+	{
+		vertices[corner][0] = (corner & 1) ? 1.0f : -1.0f;
+		vertices[corner][1] = (corner & 2) ? -1.0f : 1.0f;
+		vertices[corner][2] = 0.0f;
+		vertices[corner][3] = 1.0f;
+		vertices[corner][4] = 0.0f;
+		vertices[corner][5] = 0.0f;
+	}
+	viewport.X = 0;
+	viewport.Y = 0;
+	viewport.Width = width;
+	viewport.Height = height;
+	viewport.MinZ = 0.0f;
+	viewport.MaxZ = 1.0f;
+	IDirect3DDevice9_SetViewport(gl.device, &viewport);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_HALFPIXELOFFSET, TRUE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ALPHABLENDENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ALPHATESTENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ZENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ZWRITEENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_STENCILENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_CULLMODE, D3DCULL_NONE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_FILLMODE, D3DFILL_SOLID);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_COLORWRITEENABLE, write);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_SCISSORTESTENABLE, gl.scissor_test ? TRUE : FALSE);
+	if (gl.scissor_test)
+	{
+		RECT scissor;
+
+		scissor.left = gl.scissor[0];
+		scissor.top = gl.scissor[1];
+		scissor.right = gl.scissor[0] + gl.scissor[2];
+		scissor.bottom = gl.scissor[1] + gl.scissor[3];
+		IDirect3DDevice9_SetScissorRect(gl.device, &scissor);
+	}
+	IDirect3DDevice9_SetVertexDeclaration(gl.device, gl.blit_declaration);
+	IDirect3DDevice9_SetVertexShader(gl.device, gl.blit_vertex);
+	IDirect3DDevice9_SetPixelShader(gl.device, gl.fill_pixel);
+	IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, (const float *)color, 1);
+	IDirect3DDevice9_DrawVerticesUP(gl.device, D3DPT_TRIANGLESTRIP, 4, vertices, sizeof(vertices[0]));
+	shadow_forget();
+	X360_COUNT(clears, 1);
+}
+
 static void APIENTRY x360_glClear(GLbitfield mask)
 {
 	DWORD flags = 0;
+	BOOL fill = FALSE;
 	D3DVECTOR4 color;
 	D3DRECT rectangle;
 
@@ -4098,12 +4174,17 @@ static void APIENTRY x360_glClear(GLbitfield mask)
 	picture to black. (The screen's alpha is never shown.) */
 	if ((mask & GL_COLOR_BUFFER_BIT) && (gl.bound_color || gl.bound_screen) &&
 		(gl.color_mask[0] || gl.color_mask[1] || gl.color_mask[2] || (gl.color_mask[3] && gl.draw_framebuffer)))
-		flags |= D3DCLEAR_TARGET;
+	{
+		if (gl.draw_framebuffer && !(gl.color_mask[0] && gl.color_mask[1] && gl.color_mask[2] && gl.color_mask[3]))
+			fill = TRUE;
+		else
+			flags |= D3DCLEAR_TARGET;
+	}
 	if ((mask & GL_DEPTH_BUFFER_BIT) && gl.bound_depth)
 		flags |= D3DCLEAR_ZBUFFER;
 	if ((mask & GL_STENCIL_BUFFER_BIT) && gl.bound_depth)
 		flags |= D3DCLEAR_STENCIL;
-	if (!flags)
+	if (!flags && !fill)
 		return;
 	if (draw_logged())
 	{
@@ -4131,11 +4212,24 @@ static void APIENTRY x360_glClear(GLbitfield mask)
 		rectangle.x2 = gl.scissor[0] + gl.scissor[2];
 		rectangle.y2 = gl.scissor[1] + gl.scissor[3];
 	}
+	if (fill)
+	{
+		struct framebuffer *draw = object_get(gl.draw_framebuffer, _object_framebuffer);
+		struct texture *target = draw ? object_get(draw->color, _object_texture) : NULL;
+
+		if (target)
+			fill_masked(&color, target->width, target->height);
+		if (!flags)
+		{
+			targets_written();
+			return;
+		}
+	}
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_SCISSORTESTENABLE, FALSE);
 	IDirect3DDevice9_ClearF(gl.device, flags, gl.scissor_test ? &rectangle : NULL, &color,
 		(float)gl.clear_depth,
 		(DWORD)gl.clear_stencil);
-	if (flags & D3DCLEAR_TARGET)
+	if ((flags & D3DCLEAR_TARGET) || fill)
 		targets_written();
 }
 
