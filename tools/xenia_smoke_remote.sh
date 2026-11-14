@@ -11,10 +11,9 @@
 # (the maps are linked there, never copied, and never sent).
 #
 # --host      the ssh host (default $XENIA_SMOKE_HOST)
-# --xenia     xenia_canary on the host (default $XENIA_SMOKE_XENIA, else
-#             ~/emulators/xenia-canary/xenia_canary)
+# --xenia     xenia_canary on the host (default $XENIA_SMOKE_XENIA)
 # --maps-root the data root script on the host (default
-#             $XENIA_SMOKE_MAPS_ROOT, else ~/halo-maps/new-data-root.sh)
+#             $XENIA_SMOKE_MAPS_ROOT)
 # --xex       the XEX here (default build/xbox360/default.xex)
 # --logs      where the logs come back to here (default
 #             build/xbox360/xenia-smoke; replaced on each run)
@@ -22,15 +21,15 @@
 # --put       a file here put in the game's folder there (config.toml,
 #             gl.txt); may be given more than once
 # Anything else goes to xenia_smoke.sh (--map, --seconds, --menu-seconds,
-# --timeout, --xenia-arg).
+# --timeout, --xenia-arg, --shots-every).
 #
 # Paths on the host may start with ~/, which the host expands.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 host=${XENIA_SMOKE_HOST:-}
-xenia=${XENIA_SMOKE_XENIA:-'~/emulators/xenia-canary/xenia_canary'}
-maps_root=${XENIA_SMOKE_MAPS_ROOT:-'~/halo-maps/new-data-root.sh'}
+xenia=${XENIA_SMOKE_XENIA:-}
+maps_root=${XENIA_SMOKE_MAPS_ROOT:-}
 xex=build/xbox360/default.xex
 logs=build/xbox360/xenia-smoke
 keep=0
@@ -46,12 +45,12 @@ while [ $# -gt 0 ]; do
 		--logs) logs=$2; shift 2 ;;
 		--keep) keep=1; shift ;;
 		--put) puts+=("$2"); shift 2 ;;
-		--map|--seconds|--menu-seconds|--timeout|--xenia-arg) pass+=("$1" "$2"); shift 2 ;;
+		--map|--seconds|--menu-seconds|--timeout|--xenia-arg|--shots-every) pass+=("$1" "$2"); shift 2 ;;
 		*) echo "$0: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
-if [ -z "$host" ]; then
-	echo "usage: $0 --host HOST [--xenia PATH] [--maps-root SCRIPT] [--xex FILE] [--logs DIR] [--keep] [--map NAME] [--seconds N] [--timeout N]" >&2
+if [ -z "$host" ] || [ -z "$xenia" ] || [ -z "$maps_root" ]; then
+	echo "usage: $0 --host HOST --xenia PATH --maps-root SCRIPT [--xex FILE] [--logs DIR] [--keep] [--map NAME] [--seconds N] [--timeout N]" >&2
 	exit 2
 fi
 if [ ! -f "$xex" ]; then

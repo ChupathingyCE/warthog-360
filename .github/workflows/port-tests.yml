@@ -3,8 +3,8 @@ name: Port tests
 # The checks that need no console SDK, for every push to main and every pull
 # request: the game (the chupathingyce submodule) configures with the port,
 # and `ninja xbox360` without the toolchain says what is missing. The XEX
-# itself needs the user's own SDK, which never comes near this repository
-# or its runners.
+# itself needs the SDK, which only the self-hosted xbox-sdk runner has
+# (build.yml, on main only).
 on:
   push:
     branches:
@@ -33,6 +33,6 @@ jobs:
           test -f build.ninja
           grep -q "ninja xbox360 needs" build.ninja
       - name: The port's tools compile
-        run: python3 -m py_compile port/xbox360/build.py tools/xbox360_package.py tools/xbox360_stamp.py
+        run: python3 -m py_compile port/xbox360/build.py tools/xbox360_package.py tools/xbox360_stamp.py tools/xdk360_case_links.py
       - name: The port's host tests (which hosts the console joins)
         run: sh port/xbox360/tests/run.sh

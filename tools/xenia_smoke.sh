@@ -3,7 +3,7 @@
 # main menu, then boot again straight into a map, run it for a while, and
 # keep the logs.
 #
-#   tools/xenia_smoke.sh --xenia ~/emulators/xenia-canary/xenia_canary --xex build/xbox360/default.xex --out smoke
+#   tools/xenia_smoke.sh --xenia /path/to/xenia_canary --xex build/xbox360/default.xex --out smoke
 #
 # --xenia     xenia_canary from https://github.com/xenia-canary/xenia-canary-releases
 #             (the Linux build). Its settings, content and cache go under
@@ -11,7 +11,7 @@
 # --xex       the build's default.xex
 # --out       where the logs go (one folder a phase), and the scratch data
 # --maps-root the script that makes a data root of links to your own maps
-#             (default ~/halo-maps/new-data-root.sh); the maps are linked,
+#             (default $HALO_DATA_ROOT_SCRIPT); the maps are linked,
 #             never copied, and never written
 # --map       the map the second boot loads (default
 #             levels\test\bloodgulch\bloodgulch)
@@ -28,12 +28,20 @@
 #             for settings, gl.txt for a developer-tools build's switches);
 #             may be given more than once. Pictures the game writes there
 #             (*.raw) are kept with the phase's logs
+# --shots-every a screenshot of the display every N seconds while a phase
+#             runs, and one more at its end, in the phase's shots folder
+#             (default 15; 0 for none). Needs ImageMagick's import
 #
 # The first boot passes when the game starts the main menu's music; the
 # second when the map has loaded and the game has run it for --seconds
 # without a halt. Either fails on a halt (the game's EXCEPTION halt, or
 # the port's "x360: halted"), on Xenia
-# leaving, or on the time running out.
+# leaving, or on the time running out. A phase that got there still fails
+# when a shader did not compile ("gl: a ... shader did not compile", or
+# the native renderer's), or when the game reported no frames drawn (its
+# "x360: frame (...): N fps" lines, every 10 s; the map's must come after
+# its scripts are read). Each phase's result.txt has the reasons, and
+# summary.txt in --out has both phases on a line each.
 #
 # The second boot loads its map with the game's own d:\init.txt in the
 # test's game folder. The XEX runs as it was built: ninja xbox360 gives it
@@ -48,12 +56,13 @@ set -euo pipefail
 xenia=
 xex=
 out=
-maps_root="$HOME/halo-maps/new-data-root.sh"
+maps_root=${HALO_DATA_ROOT_SCRIPT:-}
 map='levels\test\bloodgulch\bloodgulch'
 seconds=60
 menu_seconds=10
 timeout=1800
 display=${DISPLAY:-}
+shots_every=15
 puts=()
 xenia_args=()
 
@@ -70,6 +79,7 @@ while [ $# -gt 0 ]; do
 		--display) display=$2; shift 2 ;;
 		--put) puts+=("$2"); shift 2 ;;
 		--xenia-arg) xenia_args+=("$2"); shift 2 ;;
+		--shots-every) shots_every=$2; shift 2 ;;
 		*) echo "$0: unknown argument $1" >&2; exit 2 ;;
 	esac
 done
@@ -86,11 +96,15 @@ if [ ! -f "$xex" ]; then
 	exit 2
 fi
 if [ ! -x "$maps_root" ]; then
-	echo "$0: no data root script at $maps_root" >&2
+	echo "$0: no data root script at '$maps_root' (--maps-root or HALO_DATA_ROOT_SCRIPT)" >&2
 	exit 2
 fi
 mkdir -p "$out"
 out=$(cd "$out" && pwd -P)
+if [ "$shots_every" != 0 ] && ! command -v import > /dev/null; then
+	echo "$0: no ImageMagick import for the screenshots; taking none" >&2
+	shots_every=0
+fi
 if [ -e "$out/game" ] && [ ! -f "$out/.xenia-smoke" ]; then
 	echo "$0: $out has a game folder that is not this test's (no .xenia-smoke)" >&2
 	exit 2
@@ -252,12 +266,28 @@ marked_in() {
 	fi
 }
 
+# the frame rates in the port's frame reports ("x360: frame (GL layer): 9.1
+# fps, ..."), one a line: those after the mark's line, or all for no mark
+frame_rates_after() {
+	local mark=$1 file=$2
+	[ -f "$file" ] || return 0
+	awk -v mark="$mark" 'mark == "" || index($0, mark) { seen = 1 }
+		seen && /x360: frame \(/ && match($0, /: [0-9.]+ fps/) { print substr($0, RSTART + 2, RLENGTH - 6) }' "$file"
+}
+
+# a screenshot of the display (a phase's shots folder, the picture's name)
+screenshot() {
+	[ "$shots_every" != 0 ] || return 0
+	mkdir -p "$1"
+	import -display "$display" -window root "$1/$2.png" 2> /dev/null || true
+}
+
 # a phase: boot, wait for its mark in the game's log, then hold, and keep the
 # logs (name, init.txt's text or empty, the line that must come first or
 # empty, the mark, the seconds to hold after it)
 phase() {
 	local name=$1 init=$2 after=$3 mark=$4 hold=$5
-	local logs="$out/$name" started now result=fail reason="" marked=0
+	local logs="$out/$name" started now result=fail reason="" marked=0 shot=0 last_shot=0
 	# (the game's lines go to game:\logs\debug.txt, the port's to
 	# game:\port.txt and game:\debug.txt: the marks are looked for in all)
 	local logs_found
@@ -277,12 +307,19 @@ phase() {
 		--log_file="$logs/xenia.log" "${xenia_args[@]+"${xenia_args[@]}"}" "$game/default.xex" > "$logs/xenia.out" 2>&1 &
 	xenia_pid=$!
 	started=$(date +%s)
+	last_shot=$started
+	rm -rf "$logs/shots"
 	while :; do
 		sleep 5
 		now=$(date +%s)
 		if ! kill -0 "$xenia_pid" 2> /dev/null; then
 			reason="Xenia left"
 			break
+		fi
+		if [ "$shots_every" != 0 ] && [ $((now - last_shot)) -ge "$shots_every" ]; then
+			shot=$((shot + 1))
+			screenshot "$logs/shots" "$(printf '%03d' "$shot")-$((now - started))s"
+			last_shot=$now
 		fi
 		logs_found=$(ls "$game/logs/debug.txt" "$game/port.txt" "$game/debug.txt" 2> /dev/null || true)
 		if [ -n "$logs_found" ] && grep -q -h -e "EXCEPTION halt" -e "x360: halted" $logs_found; then
@@ -302,22 +339,57 @@ phase() {
 			break
 		fi
 	done
+	if kill -0 "$xenia_pid" 2> /dev/null; then
+		screenshot "$logs/shots" last
+	fi
 	stop_xenia
 	cp "$game/logs/debug.txt" "$logs/" 2> /dev/null || true
 	cp "$game/port.txt" "$game/config.toml" "$logs/" 2> /dev/null || true
 	cp "$game/debug.txt" "$logs/port-debug.txt" 2> /dev/null || true
 	mv "$game"/*.raw "$logs/" 2> /dev/null || true
-	# (the shaders the console compiled, game:\shaders: a cache to ship)
+	# (the shaders the console compiled, game:\shaders, and the game's own
+	# list of the shaders it drew with, shader_cache.bin: the cache that
+	# ships with the build, tools/xbox360_shader_cache.sh)
 	if [ -d "$game/shaders" ]; then
 		rm -rf "$logs/shaders"
 		cp -r "$game/shaders" "$logs/shaders"
 	fi
+	cp "$game/shader_cache.bin" "$logs/" 2> /dev/null || true
 	# (shaders the console could not compile: x360_gl.c's game:\glsl)
 	if [ -d "$game/glsl" ]; then
 		mv "$game/glsl" "$logs/glsl"
 	fi
+	# (shaders that did not compile, in either renderer)
+	local shader_failures frame_rates
+	shader_failures=$(grep -c -E "(gl|native): a [a-z]+ shader did not compile" "$logs/port.txt" 2> /dev/null || true)
+	shader_failures=${shader_failures:-0}
+	if [ "$result" = pass ] && [ "$shader_failures" -gt 0 ]; then
+		result=fail
+		reason="shader failure: $shader_failures shaders did not compile (the first: $(grep -m1 -E \
+			"(gl|native): a [a-z]+ shader did not compile" "$logs/port.txt" | cut -c1-200); their HLSL in $logs/glsl)"
+	fi
+	# (frames: the menu's from the start, the map's after its mark)
+	if [ "$init" = "" ]; then
+		frame_rates=$(frame_rates_after "" "$logs/port.txt")
+	else
+		frame_rates=$(frame_rates_after "$mark" "$logs/port.txt")
+	fi
 	if [ "$result" = pass ]; then
-		echo "$name: PASS ($(( $(date +%s) - started )) s)" | tee "$logs/result.txt"
+		if [ -z "$frame_rates" ]; then
+			result=fail
+			reason="no frames: the game reported no frame drawn$([ -n "$init" ] && echo " after \"$mark\"") (no \"x360: frame (\" line in port.txt)"
+		elif ! printf '%s\n' "$frame_rates" | awk '$1 > 0 { found = 1 } END { exit !found }'; then
+			result=fail
+			reason="no frames: the game's frame reports say 0 fps"
+		fi
+	fi
+	grep -h "x360: frame (" "$logs/port.txt" 2> /dev/null | tail -2 | sed 's/.*x360: /  last frame report: /' |
+		cut -c1-240 > "$logs/frames.txt" || true
+	if [ "$result" = pass ]; then
+		echo "$name: PASS ($(( $(date +%s) - started )) s; $(printf '%s\n' "$frame_rates" |
+			awk 'NR == 1 || $1 < low { low = $1 } $1 > high { high = $1 } END { printf "%d frame reports, %.1f to %.1f fps", NR, low, high }'))" |
+			tee "$logs/result.txt"
+		tee -a "$logs/result.txt" < "$logs/frames.txt"
 	else
 		echo "$name: FAIL: $reason" | tee "$logs/result.txt"
 	fi
@@ -325,10 +397,13 @@ phase() {
 }
 
 status=0
+rm -f "$out/summary.txt"
 phase menu "" "" "starting main menu music" "$menu_seconds" || status=1
+head -1 "$out/menu/result.txt" >> "$out/summary.txt"
 # (the map: the game's init.txt; it is in once its scripts are read, which
 # follows its tags and its structure bsp)
 phase map "map_name $map" "starting precaching of map '${map##*\\}'" "scenario scripts:" "$seconds" || status=1
+head -1 "$out/map/result.txt" >> "$out/summary.txt"
 rm -rf "$data" "$game" "$out/shim"
 if [ "$status" = 0 ]; then
 	echo "xenia smoke: PASS (Xenia only; not an Xbox 360)"

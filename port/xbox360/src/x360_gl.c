@@ -44,12 +44,12 @@ the first time.
 #include "x360_port.h"
 #include "x360_glsl.h"
 #include "x360_frame_counters.h"
+#include "x360_gpu_reads.h"
 
 /* the device calls a frame makes, counted for the log every 10 seconds
 (x360_frame_counters.h); the calls below are the SDK's inline functions */
-#define IDirect3DDevice9_SetRenderState(d, s, v) (X360_COUNT(render_states, 1), D3DDevice_SetRenderState((d), (s), (v)))
-#define IDirect3DDevice9_SetSamplerState(d, n, s, v) (X360_COUNT(sampler_states, 1), \
-	D3DDevice_SetSamplerState((d), (n), (s), (v)))
+#define IDirect3DDevice9_SetRenderState(d, s, v) shadow_render_state((d), (s), (v))
+#define IDirect3DDevice9_SetSamplerState(d, n, s, v) shadow_sampler_state((d), (n), (s), (v))
 #define IDirect3DDevice9_SetTexture(d, n, t) (X360_COUNT(textures, 1), D3DDevice_SetTexture_Inline((d), (n), (t)))
 #define IDirect3DDevice9_SetVertexShaderConstantF(d, r, p, n) (X360_COUNT(vertex_constants, (n)), \
 	D3DDevice_SetVertexShaderConstantF((d), (r), (p), (n)))
@@ -58,6 +58,92 @@ the first time.
 #define IDirect3DDevice9_SetVertexShader(d, v) (X360_COUNT(shaders, 1), D3DDevice_SetVertexShader((d), (v)))
 #define IDirect3DDevice9_SetPixelShader(d, p) (X360_COUNT(shaders, 1), D3DDevice_SetPixelShader((d), (p)))
 #define IDirect3DDevice9_SetVertexDeclaration(d, v) (X360_COUNT(declarations, 1), D3DDevice_SetVertexDeclaration((d), (v)))
+
+/* ---------- the device's state, shadowed
+
+A draw sets every render state and sampler state it needs (apply_render_state,
+apply_sampler), and nearly all of them are what the device has already, the
+last draw's. The SDK's SetRenderState and SetSamplerState each go through a
+call table, so a call that would change nothing is not made. The shadow is
+forgotten at each present (shadow_forget): whatever the device changed on
+its own during a frame is set again in the next one. Textures are not
+shadowed: a texture freed and another made at the same address would look
+the same. */
+#define SHADOW_RENDER_STATES (D3DRS_MAX / 4 + 1)
+#define SHADOW_SAMPLER_STATES (D3DSAMP_MAX / 4 + 1)
+#define SHADOW_SAMPLERS 32
+
+static struct
+{
+	DWORD render_state[SHADOW_RENDER_STATES];
+	unsigned char render_state_known[SHADOW_RENDER_STATES];
+	DWORD sampler_state[SHADOW_SAMPLERS][SHADOW_SAMPLER_STATES];
+	unsigned char sampler_state_known[SHADOW_SAMPLERS][SHADOW_SAMPLER_STATES];
+	D3DVIEWPORT9 viewport;
+	BOOL viewport_known;
+} shadow;
+
+static void shadow_forget(void)
+{
+	memset(&shadow, 0, sizeof(shadow));
+}
+
+static void shadow_render_state(D3DDevice *device, D3DRENDERSTATETYPE state, DWORD value)
+{
+	unsigned long slot = (unsigned long)state / 4;
+
+	if (slot < SHADOW_RENDER_STATES && (unsigned long)state % 4 == 0)
+	{
+		if (shadow.render_state_known[slot] && shadow.render_state[slot] == value)
+			return;
+		shadow.render_state_known[slot] = 1;
+		shadow.render_state[slot] = value;
+	}
+	X360_COUNT(render_states, 1);
+	D3DDevice_SetRenderState(device, state, value);
+}
+
+static void shadow_sampler_state(D3DDevice *device, DWORD sampler, D3DSAMPLERSTATETYPE state, DWORD value)
+{
+	unsigned long slot = (unsigned long)state / 4;
+
+	if (sampler < SHADOW_SAMPLERS && slot < SHADOW_SAMPLER_STATES && (unsigned long)state % 4 == 0)
+	{
+		if (shadow.sampler_state_known[sampler][slot] && shadow.sampler_state[sampler][slot] == value)
+			return;
+		shadow.sampler_state_known[sampler][slot] = 1;
+		shadow.sampler_state[sampler][slot] = value;
+	}
+	X360_COUNT(sampler_states, 1);
+	D3DDevice_SetSamplerState(device, sampler, state, value);
+}
+
+static void shadow_viewport(D3DDevice *device, const D3DVIEWPORT9 *viewport)
+{
+	if (shadow.viewport_known && !memcmp(&shadow.viewport, viewport, sizeof(*viewport)))
+		return;
+	shadow.viewport_known = TRUE;
+	shadow.viewport = *viewport;
+	IDirect3DDevice9_SetViewport(device, viewport);
+}
+
+/* A render target set: the device gives itself the target's whole size as
+its viewport and scissor rectangle, so the viewport the shadow has is no
+longer the device's (the scissor rectangle is set at every draw). Every
+SetRenderTarget and SetDepthStencilSurface below goes through these. */
+static void shadow_render_target(D3DDevice *device, DWORD index, D3DSurface *surface)
+{
+	shadow.viewport_known = FALSE;
+	D3DDevice_SetRenderTarget(device, index, surface);
+}
+
+static void shadow_depth_stencil(D3DDevice *device, D3DSurface *surface)
+{
+	shadow.viewport_known = FALSE;
+	D3DDevice_SetDepthStencilSurface(device, surface);
+}
+#define IDirect3DDevice9_SetRenderTarget(d, i, s) shadow_render_target((d), (i), (s))
+#define IDirect3DDevice9_SetDepthStencilSurface(d, s) shadow_depth_stencil((d), (s))
 #define IDirect3DDevice9_SetStreamSource(d, n, b, o, s) (X360_COUNT(streams, 1), \
 	D3DDevice_SetStreamSource_Inline((d), (n), (b), (o), (s)))
 #define IDirect3DDevice9_SetIndices(d, i) (X360_COUNT(index_buffers, 1), D3DDevice_SetIndices((d), (i)))
@@ -232,6 +318,8 @@ struct texture
 	/* physical bytes Direct3D took for d3d (counted by x360_phys_account) */
 	unsigned long phys;
 	int phys_kind;
+	/* its console texture's bytes, about (texture_memory) */
+	unsigned long bytes;
 };
 
 /* a buffer's bytes are where the GPU reads them: physical memory of its own
@@ -305,6 +393,10 @@ struct program
 	float vertex_constants[256][4];
 	float pixel_constants[256][4];
 	int vertex_constant_count, pixel_constant_count;
+	/* the registers whose values changed since the device last had them
+	(uniform_set; low past high for none): a draw sends those, or all of
+	them when the device holds another program's (constants_program) */
+	int vertex_dirty_low, vertex_dirty_high, pixel_dirty_low, pixel_dirty_high;
 	char log[512];
 	/* deleted while in use (glDeleteProgram): it goes when another is */
 	BOOL deleted;
@@ -434,11 +526,17 @@ static struct
 	unsigned long vertex_ring_offset, index_ring_offset;
 	DWORD frame_fences[2];
 	int frame_half;
+	/* the frame being built, from 1 (never 0 in its low 16 bits: x360_gpu_reads.h) */
+	unsigned long frame_number;
 	/* vertex declarations made */
 	struct declaration_cache *declarations;
 	/* the present blit's shaders */
 	D3DVertexShader *blit_vertex;
 	D3DPixelShader *blit_pixel;
+	/* the present's, with display.gamma (gl.gamma_power = 1 / gamma; 0 until read) */
+	D3DPixelShader *blit_gamma_pixel;
+	float gamma_power;
+	D3DPixelShader *fill_pixel;
 	D3DPixelShader *green_pixel;
 	D3DVertexShader *simple_vertex, *topdown_vertex;
 	struct texture *presented;
@@ -483,9 +581,24 @@ static const char blit_vertex_source[] =
 	"struct output { float4 position : POSITION; float2 uv : TEXCOORD0; };\n"
 	"output main(float4 position : POSITION, float2 uv : TEXCOORD0)\n"
 	"{ output result; result.position = position; result.uv = uv; return result; }\n";
+/* a clear of some color channels (the fog screen's of alpha alone): a quad
+of the clear color (c0) drawn under the color write mask, since the
+console's clear has no mask */
+static const char fill_pixel_source[] =
+	"float4 color : register(c0);\n"
+	"float4 main(float2 uv : TEXCOORD0) : COLOR { return color; }\n";
 static const char blit_pixel_source[] =
 	"sampler2D source : register(s0);\n"
 	"float4 main(float2 uv : TEXCOORD0) : COLOR { return tex2D(source, uv); }\n";
+/* the present with display.gamma: the picture raised to 1 / gamma (c0.x) */
+static const char blit_gamma_pixel_source[] =
+	"sampler2D source : register(s0);\n"
+	"float4 power : register(c0);\n"
+	"float4 main(float2 uv : TEXCOORD0) : COLOR\n"
+	"{ float4 c = tex2D(source, uv); c.rgb = pow(max(c.rgb, 0.0), power.x); return c; }\n";
+
+/* (the game's settings: port_config.c) */
+double config_real(const char *name);
 
 static BOOL gl_ready(void)
 {
@@ -497,6 +610,7 @@ static BOOL gl_ready(void)
 	if (!gl.device)
 		return FALSE;
 	state_defaults();
+	gl.frame_number = 1;
 	gl.vertex_ring = x360_phys_alloc(X360_PHYS_OTHER, RING_VERTEX_SIZE, PAGE_READWRITE | PAGE_WRITECOMBINE);
 	gl.index_ring = x360_phys_alloc(X360_PHYS_OTHER, RING_INDEX_SIZE, PAGE_READWRITE | PAGE_WRITECOMBINE);
 	if (!gl.vertex_ring || !gl.index_ring)
@@ -540,6 +654,18 @@ static BOOL gl_ready(void)
 		gl.blit_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
 		x360_video_shader_free(code);
 	}
+	code = x360_video_compile(blit_gamma_pixel_source, "ps_3_0", NULL);
+	if (code)
+	{
+		gl.blit_gamma_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
+		x360_video_shader_free(code);
+	}
+	code = x360_video_compile(fill_pixel_source, "ps_3_0", NULL);
+	if (code)
+	{
+		gl.fill_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
+		x360_video_shader_free(code);
+	}
 	{
 		static const D3DVERTEXELEMENT9 elements[] =
 		{
@@ -563,6 +689,8 @@ static struct
 	LARGE_INTEGER frequency;
 	DWORD last_report;
 	unsigned long frames, draws, idle_waits, fence_waits, ring_bytes, textures_deleted;
+	/* (textures dropped for memory, and ones made again after they could not be) */
+	unsigned long textures_dropped, textures_reloaded;
 	double idle_wait_ms, fence_wait_ms, frame_ms;
 	/* (time inside the GL layer: draws, texture and buffer uploads, the
 	present's resolve and blit) */
@@ -743,6 +871,207 @@ static void storage_flush(const void *data, unsigned long size)
 
 static void texture_release(struct texture *texture);
 
+/* The textures' memory. The game's textures are copied into console
+textures of their own (unlike the native renderer's, which draw from the
+game's memory in place), and the shared texture cache keeps one until it
+hasn't been drawn for half a minute (port/linux/src/xbox_textures.c). A map
+that streams many textures through the game's texture cache (The Silent
+Cartographer) made new ones faster than that gave them back, until
+textures could not be made (drawn flat) and then nothing could. Between
+frames, while the textures are over their budget or memory runs low, the
+ones not drawn lately are dropped (sooner each time it doesn't help), and a
+texture that could not be made has everything idle dropped and is made again
+the next time it is drawn. While textures keep failing, that is done at
+most every few frames, and its log lines at most every ten seconds. */
+#define TEXTURE_MEMORY_BUDGET_MB 192
+#define TEXTURE_MEMORY_LOW_FREE_MB 24
+#define TEXTURE_MEMORY_CHECK_FRAMES 30
+#define TEXTURE_MEMORY_FAILED_MAXIMUM 64
+#define TEXTURE_MEMORY_FAILED_INTERVAL_FRAMES 10
+#define TEXTURE_MEMORY_LOG_MS 10000
+
+/* port/linux/src/xgpu.h's: the shared texture cache's */
+unsigned long xgpu_texture_cache_drop_idle(unsigned long frames);
+void xgpu_texture_cache_reload(GLuint texture);
+unsigned long xgpu_texture_cache_reload_missing(int (*missing)(GLuint texture));
+
+/* a log line at most every ten seconds; the next one says how many were held back */
+struct log_limit
+{
+	DWORD last;
+	unsigned long held;
+};
+
+static BOOL log_limit_due(struct log_limit *limit)
+{
+	DWORD now = GetTickCount();
+
+	if (limit->last && now - limit->last < TEXTURE_MEMORY_LOG_MS)
+	{
+		limit->held++;
+		return FALSE;
+	}
+	limit->last = now ? now : 1;
+	return TRUE;
+}
+
+static struct
+{
+	/* every console texture's bytes (Direct3D's measure or the estimate,
+	whichever is more), but the render targets': the texture cache can't
+	drop those */
+	unsigned long bytes;
+	/* how many checks in a row have found the textures over (0 to 2) */
+	int pressure;
+	struct log_limit dropped_log, failed_log, cannot_make_log;
+	/* the frame the last textures that could not be made were handled */
+	unsigned long failed_frame;
+	/* the textures that could not be made since the last check */
+	GLuint failed[TEXTURE_MEMORY_FAILED_MAXIMUM];
+	int failed_count;
+	BOOL failed_overflow;
+} texture_memory;
+
+/* (how long a texture must not have been drawn to be dropped: about ten
+seconds, then two while it keeps being over; after a texture could not be
+made, any not drawn this frame or the last) */
+#define TEXTURE_MEMORY_IDLE_FRAMES_FIRST 600
+#define TEXTURE_MEMORY_IDLE_FRAMES_AGAIN 120
+#define TEXTURE_MEMORY_IDLE_FRAMES_FAILED 1
+
+/* about what a console texture takes: its levels' texels, a page at least */
+static unsigned long texture_bytes_estimate(unsigned long width, unsigned long height, unsigned long depth,
+	int levels, int faces, BOOL compressed, BOOL dxt1)
+{
+	unsigned long bytes = 0;
+	int level;
+
+	for (level = 0; level < levels; level++)
+	{
+		unsigned long w = width >> level ? width >> level : 1;
+		unsigned long h = height >> level ? height >> level : 1;
+		unsigned long d = depth >> level ? depth >> level : 1;
+
+		if (compressed)
+			bytes += (w + 3) / 4 * ((h + 3) / 4) * (dxt1 ? 8 : 16) * d;
+		else
+			bytes += w * h * 4 * d;
+	}
+	bytes *= (unsigned long)faces;
+	return (bytes + 4095) & ~4095UL;
+}
+
+static void texture_memory_failed(GLuint name, unsigned long width, unsigned long height)
+{
+	int index;
+
+	for (index = 0; index < texture_memory.failed_count; index++)
+	{
+		if (texture_memory.failed[index] == name)
+			return;
+	}
+	if (texture_memory.failed_count == TEXTURE_MEMORY_FAILED_MAXIMUM)
+	{
+		texture_memory.failed_overflow = TRUE;
+		return;
+	}
+	if (!texture_memory.failed_count && log_limit_due(&texture_memory.failed_log))
+	{
+		x360_log("gl: out of memory for textures: a %lux%lu one could not be made (%lu MB of textures, "
+			"%lu more times since the last line); dropping the ones not drawn lately, it is made again soon",
+			width, height, texture_memory.bytes >> 20, texture_memory.failed_log.held);
+		texture_memory.failed_log.held = 0;
+	}
+	texture_memory.failed[texture_memory.failed_count++] = name;
+}
+
+static void retired_textures_free(int half);
+
+/* a texture the cache holds that has no console texture (it could not be made) */
+static int texture_missing(GLuint name)
+{
+	struct texture *texture = object_get(name, _object_texture);
+
+	return texture && !texture->d3d && !texture->depth_format && !texture->surface;
+}
+
+/* the texture's bytes taken off the textures' count */
+static void texture_memory_uncount(struct texture *texture)
+{
+	texture_memory.bytes -= texture->bytes < texture_memory.bytes ? texture->bytes : texture_memory.bytes;
+	texture->bytes = 0;
+}
+
+/* between frames: the textures back under their budget, and the ones that
+could not be made made again */
+static void texture_memory_check(void)
+{
+	unsigned long bytes_before = texture_memory.bytes;
+	unsigned long free_mb, frames, dropped;
+	BOOL failed = texture_memory.failed_count > 0 || texture_memory.failed_overflow;
+	int index;
+
+	if (!failed && gl.frame % TEXTURE_MEMORY_CHECK_FRAMES)
+		return;
+	/* (while textures keep failing, the wait for the GPU below only every
+	few frames) */
+	if (failed && texture_memory.failed_frame &&
+		gl.frame - texture_memory.failed_frame < TEXTURE_MEMORY_FAILED_INTERVAL_FRAMES)
+	{
+		return;
+	}
+	{
+		MEMORYSTATUS status;
+
+		GlobalMemoryStatus(&status);
+		free_mb = (unsigned long)(status.dwAvailPhys >> 20);
+	}
+	if (!failed && texture_memory.bytes <= (unsigned long)TEXTURE_MEMORY_BUDGET_MB << 20 &&
+		free_mb >= TEXTURE_MEMORY_LOW_FREE_MB)
+	{
+		texture_memory.pressure = 0;
+		return;
+	}
+	if (texture_memory.pressure < 2)
+		texture_memory.pressure++;
+	frames = failed ? TEXTURE_MEMORY_IDLE_FRAMES_FAILED : texture_memory.pressure == 1 ?
+		TEXTURE_MEMORY_IDLE_FRAMES_FIRST : TEXTURE_MEMORY_IDLE_FRAMES_AGAIN;
+	dropped = xgpu_texture_cache_drop_idle(frames);
+	stats.textures_dropped += dropped;
+	if (failed)
+	{
+		/* (what was dropped freed now, not two frames on: the GPU is done
+		with every frame's textures, and no sampler is left on one) */
+		gpu_idle_wait();
+		for (index = 0; index < TEXTURE_UNITS; index++)
+			IDirect3DDevice9_SetTexture(gl.device, (DWORD)index, NULL);
+		retired_textures_free(0);
+		retired_textures_free(1);
+		/* (more failed than were listed: every texture without its console
+		texture is made again) */
+		if (texture_memory.failed_overflow)
+		{
+			stats.textures_reloaded += xgpu_texture_cache_reload_missing(texture_missing);
+		}
+		else
+		{
+			for (index = 0; index < texture_memory.failed_count; index++)
+				xgpu_texture_cache_reload(texture_memory.failed[index]);
+			stats.textures_reloaded += (unsigned long)texture_memory.failed_count;
+		}
+		texture_memory.failed_count = 0;
+		texture_memory.failed_overflow = FALSE;
+		texture_memory.failed_frame = gl.frame ? gl.frame : 1;
+	}
+	if (dropped && log_limit_due(&texture_memory.dropped_log))
+	{
+		x360_log("gl: dropped %lu textures not drawn in %lu frames (%lu MB of textures, budget %lu MB; %lu MB free; "
+			"%lu more drops since the last line)", dropped, frames, bytes_before >> 20,
+			(unsigned long)TEXTURE_MEMORY_BUDGET_MB, free_mb, texture_memory.dropped_log.held);
+		texture_memory.dropped_log.held = 0;
+	}
+}
+
 #define RETIRED_TEXTURES_MAXIMUM 256
 
 static struct
@@ -856,6 +1185,79 @@ static void rings_next_frame(void)
 	}
 	gl.vertex_ring_offset = gl.frame_half * (RING_VERTEX_SIZE / 2);
 	gl.index_ring_offset = gl.frame_half * (RING_INDEX_SIZE / 2);
+	gl.frame_number++;
+	if (!(unsigned short)gl.frame_number)
+		gl.frame_number++;
+}
+
+/* ---------- the window's memory read in place (x360_gpu_reads.h)
+
+The game's D3D8 layer asks about a resource before a lock writes it
+(halo_resource_busy and halo_resource_wait, xbox360_gpu_hooks.c): busy
+while a frame whose draws read it in place is not through on the GPU. The
+frame being built always is; the last frame is until its fence has passed;
+older frames were waited for when their ring half was taken again
+(rings_next_frame). */
+
+extern unsigned int xbox_address_space_base;
+
+static unsigned long window_offset(const void *data)
+{
+	return (unsigned long)((unsigned int)(UINT_PTR)data - xbox_address_space_base) - 0x80000000UL;
+}
+
+static void reads_mark(const void *data, unsigned long size)
+{
+	x360_gpu_reads_mark(window_offset(data), size, (unsigned short)gl.frame_number);
+}
+
+BOOL x360_gl_active(void)
+{
+	return gl.device != NULL;
+}
+
+unsigned long x360_gl_memory_read_frame(const void *data, unsigned long size)
+{
+	return x360_gpu_reads_newest(window_offset(data), size, (unsigned short)gl.frame_number);
+}
+
+BOOL x360_gl_frame_done(unsigned long frame)
+{
+	unsigned short current = (unsigned short)gl.frame_number;
+
+	if (!frame || !gl.device)
+		return TRUE;
+	if ((unsigned short)frame == current)
+		return FALSE;
+	if ((unsigned short)frame == (unsigned short)(current - 1))
+	{
+		DWORD fence = gl.frame_fences[gl.frame_half ^ 1];
+
+		return !fence || !D3DDevice_IsFencePending(fence);
+	}
+	return TRUE;
+}
+
+void x360_gl_frame_wait(unsigned long frame)
+{
+	LARGE_INTEGER start;
+
+	if (x360_gl_frame_done(frame))
+		return;
+	STATS_NOW(start);
+	if ((unsigned short)frame == (unsigned short)gl.frame_number)
+	{
+		/* (this frame's draws so far) */
+		DWORD fence = IDirect3DDevice9_InsertFence(gl.device);
+
+		if (fence)
+			D3DDevice_BlockOnFence(fence);
+	}
+	else
+		D3DDevice_BlockOnFence(gl.frame_fences[gl.frame_half ^ 1]);
+	stats.fence_waits++;
+	stats.fence_wait_ms += stats_ms_since(start);
+	X360_COUNT(lock_waits, 1);
 }
 
 /* ---------- textures */
@@ -896,6 +1298,7 @@ static void edram_forget(struct texture *texture);
 
 static void texture_release(struct texture *texture)
 {
+	texture_memory_uncount(texture);
 	edram_forget(texture);
 	if (texture->phys)
 		x360_phys_account(texture->phys_kind, -(long)texture->phys);
@@ -1000,13 +1403,23 @@ static BOOL texture_allocate(struct texture *texture, GLenum target, GLenum inte
 			(D3DTexture **)&texture->d3d, NULL);
 	if (FAILED(result) || !texture->d3d)
 	{
-		x360_log("gl: cannot make a %lux%lux%lu texture (format 0x%08lx, 0x%08lx)", width, height, depth,
-			(unsigned long)format, (unsigned long)result);
-		x360_phys_failure("texture", width * height * (depth ? depth : 1));
+		if (log_limit_due(&texture_memory.cannot_make_log))
+		{
+			x360_log("gl: cannot make a %lux%lux%lu texture (format 0x%08lx, 0x%08lx; %lu more since the last line)",
+				width, height, depth, (unsigned long)format, (unsigned long)result,
+				texture_memory.cannot_make_log.held);
+			texture_memory.cannot_make_log.held = 0;
+			x360_phys_failure("texture", width * height * (depth ? depth : 1));
+		}
 		texture->d3d = NULL;
 		return FALSE;
 	}
 	texture_count_phys(texture, phys_before);
+	texture->bytes = texture_bytes_estimate(width, height, target == GL_TEXTURE_3D ? depth : 1, levels,
+		target == GL_TEXTURE_CUBE_MAP ? 6 : 1, compressed, format == (D3DFORMAT)MAKELEFMT(D3DFMT_LIN_DXT1));
+	if (texture->bytes < texture->phys)
+		texture->bytes = texture->phys;
+	texture_memory.bytes += texture->bytes;
 	return TRUE;
 }
 
@@ -1120,6 +1533,7 @@ static void image(GLenum target, GLint level, GLint internal, GLsizei width, GLs
 		if (!texture_allocate(texture, whole, (GLenum)internal, (unsigned long)width, (unsigned long)height,
 			(unsigned long)(depth ? depth : 1), console, compressed))
 		{
+			texture_memory_failed(*bound_texture_slot(whole), (unsigned long)width, (unsigned long)height);
 			return;
 		}
 	}
@@ -1194,7 +1608,7 @@ landed in the 3D view. */
 static struct texture *edram_targets[EDRAM_TARGETS];
 
 static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
-	float y1, unsigned long width, unsigned long height, BOOL linear);
+	float y1, unsigned long width, unsigned long height, BOOL linear, BOOL to_screen);
 static void texture_resolve(struct texture *texture);
 
 static void edram_forget(struct texture *texture)
@@ -1276,7 +1690,7 @@ static void edram_claim(struct texture *texture)
 	gl.bound_color = texture->surface;
 	gl.bound_depth = NULL;
 	blit_quad(texture, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, (float)texture->width, (float)texture->height,
-		texture->width, texture->height, FALSE);
+		texture->width, texture->height, FALSE, FALSE);
 }
 
 static BOOL texture_surface(struct texture *texture)
@@ -1347,6 +1761,8 @@ static BOOL texture_surface(struct texture *texture)
 	{
 		unsigned long phys_before;
 
+		/* (a target isn't the texture cache's to drop: not in the textures' count) */
+		texture_memory_uncount(texture);
 		if (texture->phys)
 			x360_phys_account(texture->phys_kind, -(long)texture->phys);
 		texture->phys = 0;
@@ -1742,6 +2158,35 @@ static void program_uniforms(struct program *program, struct shader *vertex, str
 #define LOCATION_UNIFORM(location) (((location) >> 10) - 1)
 #define LOCATION_ELEMENT(location) ((location) & 1023)
 
+/* the program whose constants the device holds (prepare_draw); NULL when
+it is none that is known */
+static struct program *constants_program;
+
+/* A constant's value in the program's table, and the registers the device
+has still to get. A register set for the first time lies at or past the
+count, and the registers between the count and it have never been set:
+they are zero, as a uniform never set is, and the device must get those
+too (it holds whatever the last program left there), so the dirty range
+runs from the old count. A register set before goes only when its value
+changed. */
+static void constant_set(float constants[256][4], int *count, int *dirty_low, int *dirty_high, int reg,
+	const float vector[4])
+{
+	if (reg >= *count)
+	{
+		if (*count < *dirty_low)
+			*dirty_low = *count;
+		*count = reg + 1;
+	}
+	else if (!memcmp(constants[reg], vector, sizeof(float) * 4))
+		return;
+	else if (reg < *dirty_low)
+		*dirty_low = reg;
+	if (reg > *dirty_high)
+		*dirty_high = reg;
+	memcpy(constants[reg], vector, sizeof(float) * 4);
+}
+
 static void uniform_set(GLint location, const float *values, int vectors, int components)
 {
 	struct program *program = object_get(gl.program, _object_program);
@@ -1764,17 +2209,44 @@ static void uniform_set(GLint location, const float *values, int vectors, int co
 		memcpy(vector, values, sizeof(float) * (size_t)components);
 		if (uniform->vertex_register >= 0 && uniform->vertex_register + element < 256)
 		{
-			memcpy(program->vertex_constants[uniform->vertex_register + element], vector, sizeof(vector));
-			if (uniform->vertex_register + element + 1 > program->vertex_constant_count)
-				program->vertex_constant_count = uniform->vertex_register + element + 1;
+			constant_set(program->vertex_constants, &program->vertex_constant_count, &program->vertex_dirty_low,
+				&program->vertex_dirty_high, uniform->vertex_register + element, vector);
 		}
 		if (uniform->pixel_register >= 0 && uniform->pixel_register + element < 256)
 		{
-			memcpy(program->pixel_constants[uniform->pixel_register + element], vector, sizeof(vector));
-			if (uniform->pixel_register + element + 1 > program->pixel_constant_count)
-				program->pixel_constant_count = uniform->pixel_register + element + 1;
+			constant_set(program->pixel_constants, &program->pixel_constant_count, &program->pixel_dirty_low,
+				&program->pixel_dirty_high, uniform->pixel_register + element, vector);
 		}
 	}
+}
+
+/* the constants a draw needs on the device: all of the program's when the
+device holds another's, else the ones set since the last draw */
+static void constants_apply(struct program *program)
+{
+	if (program != constants_program)
+	{
+		if (program->vertex_constant_count)
+			IDirect3DDevice9_SetVertexShaderConstantF(gl.device, 0, &program->vertex_constants[0][0],
+				(UINT)program->vertex_constant_count);
+		if (program->pixel_constant_count)
+			IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, &program->pixel_constants[0][0],
+				(UINT)program->pixel_constant_count);
+		constants_program = program;
+	}
+	else
+	{
+		if (program->vertex_dirty_low <= program->vertex_dirty_high)
+			IDirect3DDevice9_SetVertexShaderConstantF(gl.device, (UINT)program->vertex_dirty_low,
+				&program->vertex_constants[program->vertex_dirty_low][0],
+				(UINT)(program->vertex_dirty_high - program->vertex_dirty_low + 1));
+		if (program->pixel_dirty_low <= program->pixel_dirty_high)
+			IDirect3DDevice9_SetPixelShaderConstantF(gl.device, (UINT)program->pixel_dirty_low,
+				&program->pixel_constants[program->pixel_dirty_low][0],
+				(UINT)(program->pixel_dirty_high - program->pixel_dirty_low + 1));
+	}
+	program->vertex_dirty_low = program->pixel_dirty_low = 256;
+	program->vertex_dirty_high = program->pixel_dirty_high = -1;
 }
 
 /* ---------- draws */
@@ -1831,16 +2303,24 @@ static unsigned long attribute_bytes(const struct attribute *attribute, BOOL pac
 
 static D3DVertexDeclaration *declaration_get(const D3DVERTEXELEMENT9 *elements, int count)
 {
+	/* (the last one found first: a run of draws shares its layout) */
+	static struct declaration_cache *last;
 	struct declaration_cache *entry;
 
+	if (last && last->count == count && !memcmp(last->elements, elements, sizeof(D3DVERTEXELEMENT9) * (size_t)count))
+		return last->declaration;
 	for (entry = gl.declarations; entry; entry = entry->next)
 	{
 		if (entry->count == count && !memcmp(entry->elements, elements, sizeof(D3DVERTEXELEMENT9) * (size_t)count))
+		{
+			last = entry;
 			return entry->declaration;
+		}
 	}
 	entry = calloc(1, sizeof(*entry));
 	if (!entry)
 		return NULL;
+	last = entry;
 	memcpy(entry->elements, elements, sizeof(D3DVERTEXELEMENT9) * (size_t)count);
 	entry->count = count;
 	{
@@ -2027,7 +2507,7 @@ static void apply_render_state(void)
 	viewport.Height = (DWORD)gl.viewport[3];
 	viewport.MinZ = (float)gl.depth_near;
 	viewport.MaxZ = (float)gl.depth_far;
-	IDirect3DDevice9_SetViewport(device, &viewport);
+	shadow_viewport(device, &viewport);
 }
 
 static void apply_sampler(int sampler_register, struct texture *texture, const struct sampler *sampler)
@@ -2305,12 +2785,7 @@ static BOOL prepare_draw(struct program **program_out, struct shader **vertex_ou
 			program->pixel_constant_count, (void *)gl.bound_color, (void *)gl.bound_depth);
 		draw_log_targets_and_textures(program);
 	}
-	if (program->vertex_constant_count)
-		IDirect3DDevice9_SetVertexShaderConstantF(gl.device, 0, &program->vertex_constants[0][0],
-			(UINT)program->vertex_constant_count);
-	if (program->pixel_constant_count)
-		IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, &program->pixel_constants[0][0],
-			(UINT)program->pixel_constant_count);
+	constants_apply(program);
 	*program_out = program;
 	*vertex_out = vertex;
 	return TRUE;
@@ -2353,22 +2828,31 @@ static struct bound_shader *bound_shaders;
 static D3DVertexShader *vertex_shader_bound(struct shader *shader, D3DVertexDeclaration *declaration,
 	const DWORD *strides, int stream_count)
 {
+	/* (the last one found first: a run of draws shares its shader) */
+	static struct bound_shader *last;
 	struct bound_shader *entry;
 	static unsigned long made;
 
 	if (!shader->code)
 		return NULL;
+	if (last && last->shader == shader && last->declaration == declaration &&
+		!memcmp(last->strides, strides, sizeof(last->strides)))
+	{
+		return last->bound;
+	}
 	for (entry = bound_shaders; entry; entry = entry->next)
 	{
 		if (entry->shader == shader && entry->declaration == declaration &&
 			!memcmp(entry->strides, strides, sizeof(entry->strides)))
 		{
+			last = entry;
 			return entry->bound;
 		}
 	}
 	entry = calloc(1, sizeof(*entry));
 	if (!entry)
 		return NULL;
+	last = entry;
 	entry->shader = shader;
 	entry->declaration = declaration;
 	memcpy(entry->strides, strides, sizeof(entry->strides));
@@ -2463,7 +2947,7 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 			{
 				struct buffer *buffer = object_get(binding->buffer, _object_buffer);
 				unsigned long stride = (unsigned long)binding->stride;
-				unsigned long bytes;
+				unsigned long bytes, needed;
 				unsigned char *copy;
 
 				if (!buffer || !buffer->data || (unsigned long)binding->offset >= buffer->size)
@@ -2471,6 +2955,13 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 				/* (read where it is: buffers are in memory the GPU reads) */
 				copy = buffer->data + binding->offset;
 				bytes = buffer->size - (unsigned long)binding->offset;
+				/* (the vertices the draw reads, from the base vertex's on: a
+				stream as long as the rest of a big buffer is megabytes the
+				GPU never reads, which Xenia will not map) */
+				needed = stride ? stride * (vertex_end + (draw_base_vertex > 0 ? (unsigned long)draw_base_vertex : 0))
+					: 64;
+				if (!deindex_indices && needed < bytes)
+					bytes = needed;
 				if (deindex_indices)
 				{
 					unsigned long k;
@@ -2507,13 +2998,20 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 				{
 					/* (a stream starts on 4 bytes: an odd one is copied) */
 					again.in_place = FALSE;
-					bytes = stride ? stride * vertex_end : 64;
+					/* (from the buffer's start: the base vertex's are in it) */
+					bytes = needed;
 					if ((unsigned long)binding->offset + bytes > buffer->size)
 						bytes = buffer->size - (unsigned long)binding->offset;
 					copy = ring_reserve(gl.vertex_ring, RING_VERTEX_SIZE, &gl.vertex_ring_offset, bytes);
 					if (!copy)
 						return FALSE;
 					ring_copy(copy, buffer->data + binding->offset, bytes);
+				}
+				else if (buffer->alias)
+				{
+					/* (read in place: the GPU may still be reading it when the
+					game next writes it, which a lock of it asks about) */
+					reads_mark(copy, bytes);
 				}
 				if (draw_base_vertex && !deindex_indices)
 				{
@@ -2760,6 +3258,10 @@ static void dump_after_draw(unsigned long index)
 	free(linear);
 }
 
+/* a draw's indices less a base below 0 (draw_timed), written in cached
+memory, then copied into the ring */
+static unsigned char folded_indices[0x40000];
+
 static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GLenum index_type,
 	const void *indices, long base_vertex);
 
@@ -2817,6 +3319,7 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 		void *copy;
 		static D3DIndexBuffer index_headers[2];
 		unsigned long index, highest = 0, lowest = ~0UL;
+		BOOL fold_base;
 
 		if (!buffer || !buffer->data || offset + count * index_bytes > buffer->size)
 			return;
@@ -2855,9 +3358,20 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 			targets_written();
 			return;
 		}
+		/* (a base below 0 would start the streams before their buffers,
+		memory the draw never reads but that need not be there: Xenia drops
+		such a draw. The base is taken off the indices instead, when none of
+		them goes below 0) */
+		fold_base = base_vertex < 0 && (long)lowest + base_vertex >= 0 && !debug.index_le &&
+			count * index_bytes <= sizeof(folded_indices);
+		if (fold_base)
+		{
+			lowest = (unsigned long)((long)lowest + base_vertex);
+			highest = (unsigned long)((long)highest + base_vertex);
+		}
 		/* (vertices by index: the base is in the streams' addresses) */
 		vertex_end = highest + 1;
-		draw_base_vertex = base_vertex;
+		draw_base_vertex = fold_base ? 0 : base_vertex;
 		copy = ring_reserve(gl.index_ring, RING_INDEX_SIZE, &gl.index_ring_offset, count * index_bytes);
 		stats.index_ms += stats_ms_since(part);
 		STATS_NOW(part);
@@ -2869,6 +3383,23 @@ static void draw_timed(GLenum mode, unsigned long first, unsigned long count, GL
 		stats.vertices_ms += stats_ms_since(part);
 		STATS_NOW(part);
 		draw_base_vertex = 0;
+		if (fold_base)
+		{
+			for (index = 0; index < count; index++)
+			{
+				if (index_bytes == 4)
+					((unsigned long *)folded_indices)[index] =
+						(unsigned long)((long)((const unsigned long *)source)[index] + base_vertex);
+				else
+				{
+					unsigned short value = ((const unsigned short *)source)[index];
+
+					((unsigned short *)folded_indices)[index] =
+						value == 0xffff ? value : (unsigned short)((long)value + base_vertex);
+				}
+			}
+			source = folded_indices;
+		}
 		ring_copy(copy, source, count * index_bytes);
 		XGSetIndexBufferHeader(count * index_bytes, 0, index_bytes == 4 ? D3DFMT_INDEX32 : debug.index_le ? D3DFMT_LE_INDEX16 : D3DFMT_INDEX16, 0,
 			0, &index_headers[gl.frame_half]);
@@ -3038,7 +3569,7 @@ static void console_gl_draw_again(GLenum mode, GLint first, GLsizei count)
 /* ---------- blits: a textured quad */
 
 static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
-	float y1, unsigned long width, unsigned long height, BOOL linear)
+	float y1, unsigned long width, unsigned long height, BOOL linear, BOOL to_screen)
 {
 	float vertices[4][6];
 	int corner;
@@ -3064,7 +3595,7 @@ static void blit_quad(struct texture *source, float u0, float v0, float u1, floa
 	viewport.Height = height;
 	viewport.MinZ = 0.0f;
 	viewport.MaxZ = 1.0f;
-	IDirect3DDevice9_SetViewport(gl.device, &viewport);
+	shadow_viewport(gl.device, &viewport);
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_HALFPIXELOFFSET, TRUE);
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ALPHABLENDENABLE, FALSE);
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ZENABLE, FALSE);
@@ -3076,7 +3607,16 @@ static void blit_quad(struct texture *source, float u0, float v0, float u1, floa
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_ALL);
 	IDirect3DDevice9_SetVertexDeclaration(gl.device, gl.blit_declaration);
 	IDirect3DDevice9_SetVertexShader(gl.device, gl.blit_vertex);
-	IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_pixel);
+	if (to_screen && gl.blit_gamma_pixel && gl.gamma_power > 0.0f && gl.gamma_power != 1.0f)
+	{
+		/* (display.gamma: the picture raised to 1 / gamma on its way out) */
+		float power[4] = { gl.gamma_power, gl.gamma_power, gl.gamma_power, 1.0f };
+
+		IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_gamma_pixel);
+		IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, power, 1);
+	}
+	else
+		IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_pixel);
 	IDirect3DDevice9_SetTexture(gl.device, 0, source->d3d);
 	IDirect3DDevice9_SetSamplerState(gl.device, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 	IDirect3DDevice9_SetSamplerState(gl.device, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -3261,9 +3801,19 @@ static void APIENTRY x360_glDeleteTextures(GLsizei n, const GLuint *names)
 	for (index = 0; index < n; index++)
 	{
 		struct texture *texture = object_get(names[index], _object_texture);
+		int unit, slot;
 
 		if (!texture)
 			continue;
+		/* (unbound wherever it was bound, as GL does) */
+		for (unit = 0; unit < TEXTURE_UNITS; unit++)
+		{
+			for (slot = 0; slot < 3; slot++)
+			{
+				if (gl.textures[unit][slot] == names[index])
+					gl.textures[unit][slot] = 0;
+			}
+		}
 		/* (not while the GPU may read it: released two frames on) */
 		texture_retire(texture);
 		stats.textures_deleted++;
@@ -3545,9 +4095,72 @@ static void APIENTRY x360_glFramebufferRenderbuffer(GLenum target, GLenum attach
 	(void)target; (void)attachment; (void)renderbuffer_target; (void)renderbuffer;
 }
 
+/* The color channels the color mask lets through filled with a color: a
+quad over the bound target under D3DRS_COLORWRITEENABLE, the scissor kept
+(the console's clear writes every channel: the fog screen clears the 3D
+view's alpha alone before it draws the fog's density into it, and a whole
+clear wiped the view to black on The Library and the swamp levels). The
+states it sets are forgotten by the shadow, so the next draw sends its own. */
+static void fill_masked(const D3DVECTOR4 *color, unsigned long width, unsigned long height)
+{
+	float vertices[4][6];
+	int corner;
+	D3DVIEWPORT9 viewport;
+	DWORD write = (gl.color_mask[0] ? D3DCOLORWRITEENABLE_RED : 0) | (gl.color_mask[1] ? D3DCOLORWRITEENABLE_GREEN : 0) |
+		(gl.color_mask[2] ? D3DCOLORWRITEENABLE_BLUE : 0) | (gl.color_mask[3] ? D3DCOLORWRITEENABLE_ALPHA : 0);
+
+	again.valid = FALSE;
+	if (!gl.blit_vertex || !gl.fill_pixel || !gl.blit_declaration || !write)
+		return;
+	for (corner = 0; corner < 4; corner++)
+	{
+		vertices[corner][0] = (corner & 1) ? 1.0f : -1.0f;
+		vertices[corner][1] = (corner & 2) ? -1.0f : 1.0f;
+		vertices[corner][2] = 0.0f;
+		vertices[corner][3] = 1.0f;
+		vertices[corner][4] = 0.0f;
+		vertices[corner][5] = 0.0f;
+	}
+	viewport.X = 0;
+	viewport.Y = 0;
+	viewport.Width = width;
+	viewport.Height = height;
+	viewport.MinZ = 0.0f;
+	viewport.MaxZ = 1.0f;
+	IDirect3DDevice9_SetViewport(gl.device, &viewport);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_HALFPIXELOFFSET, TRUE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ALPHABLENDENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ALPHATESTENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ZENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_ZWRITEENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_STENCILENABLE, FALSE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_CULLMODE, D3DCULL_NONE);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_FILLMODE, D3DFILL_SOLID);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_COLORWRITEENABLE, write);
+	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_SCISSORTESTENABLE, gl.scissor_test ? TRUE : FALSE);
+	if (gl.scissor_test)
+	{
+		RECT scissor;
+
+		scissor.left = gl.scissor[0];
+		scissor.top = gl.scissor[1];
+		scissor.right = gl.scissor[0] + gl.scissor[2];
+		scissor.bottom = gl.scissor[1] + gl.scissor[3];
+		IDirect3DDevice9_SetScissorRect(gl.device, &scissor);
+	}
+	IDirect3DDevice9_SetVertexDeclaration(gl.device, gl.blit_declaration);
+	IDirect3DDevice9_SetVertexShader(gl.device, gl.blit_vertex);
+	IDirect3DDevice9_SetPixelShader(gl.device, gl.fill_pixel);
+	IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, (const float *)color, 1);
+	IDirect3DDevice9_DrawVerticesUP(gl.device, D3DPT_TRIANGLESTRIP, 4, vertices, sizeof(vertices[0]));
+	shadow_forget();
+	X360_COUNT(clears, 1);
+}
+
 static void APIENTRY x360_glClear(GLbitfield mask)
 {
 	DWORD flags = 0;
+	BOOL fill = FALSE;
 	D3DVECTOR4 color;
 	D3DRECT rectangle;
 
@@ -3561,12 +4174,17 @@ static void APIENTRY x360_glClear(GLbitfield mask)
 	picture to black. (The screen's alpha is never shown.) */
 	if ((mask & GL_COLOR_BUFFER_BIT) && (gl.bound_color || gl.bound_screen) &&
 		(gl.color_mask[0] || gl.color_mask[1] || gl.color_mask[2] || (gl.color_mask[3] && gl.draw_framebuffer)))
-		flags |= D3DCLEAR_TARGET;
+	{
+		if (gl.draw_framebuffer && !(gl.color_mask[0] && gl.color_mask[1] && gl.color_mask[2] && gl.color_mask[3]))
+			fill = TRUE;
+		else
+			flags |= D3DCLEAR_TARGET;
+	}
 	if ((mask & GL_DEPTH_BUFFER_BIT) && gl.bound_depth)
 		flags |= D3DCLEAR_ZBUFFER;
 	if ((mask & GL_STENCIL_BUFFER_BIT) && gl.bound_depth)
 		flags |= D3DCLEAR_STENCIL;
-	if (!flags)
+	if (!flags && !fill)
 		return;
 	if (draw_logged())
 	{
@@ -3594,11 +4212,24 @@ static void APIENTRY x360_glClear(GLbitfield mask)
 		rectangle.x2 = gl.scissor[0] + gl.scissor[2];
 		rectangle.y2 = gl.scissor[1] + gl.scissor[3];
 	}
+	if (fill)
+	{
+		struct framebuffer *draw = object_get(gl.draw_framebuffer, _object_framebuffer);
+		struct texture *target = draw ? object_get(draw->color, _object_texture) : NULL;
+
+		if (target)
+			fill_masked(&color, target->width, target->height);
+		if (!flags)
+		{
+			targets_written();
+			return;
+		}
+	}
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_SCISSORTESTENABLE, FALSE);
 	IDirect3DDevice9_ClearF(gl.device, flags, gl.scissor_test ? &rectangle : NULL, &color,
 		(float)gl.clear_depth,
 		(DWORD)gl.clear_stencil);
-	if (flags & D3DCLEAR_TARGET)
+	if ((flags & D3DCLEAR_TARGET) || fill)
 		targets_written();
 }
 
@@ -3643,12 +4274,20 @@ static void APIENTRY x360_glBlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLi
 		width = destination->width;
 		height = destination->height;
 	}
+	if (!gl.draw_framebuffer && gl.gamma_power == 0.0f)
+	{
+		double gamma = config_real("display.gamma");
+
+		gl.gamma_power = gamma > 0.1 && gamma < 10.0 ? (float)(1.0 / gamma) : 1.0f;
+		if (gl.gamma_power != 1.0f)
+			x360_log("gl: display.gamma %.2f: the picture raised to %.3f on its way out", gamma, gl.gamma_power);
+	}
 	u0 = (float)sx0 / (float)source->width;
 	u1 = (float)sx1 / (float)source->width;
 	v0 = (float)sy0 / (float)source->height;
 	v1 = (float)sy1 / (float)source->height;
 	blit_quad(source, u0, v0, u1, v1, (float)dx0, (float)dy0, (float)dx1, (float)dy1, width, height,
-		filter == GL_LINEAR);
+		filter == GL_LINEAR, !gl.draw_framebuffer);
 	if (!gl.draw_framebuffer)
 		gl.presented = source;
 	targets_written();
@@ -4149,6 +4788,8 @@ static void program_free(GLuint name)
 	objects[name].data = NULL;
 	shader_detach(program->vertex);
 	shader_detach(program->fragment);
+	if (constants_program == program)
+		constants_program = NULL;
 	free(program);
 }
 
@@ -4186,6 +4827,10 @@ static void APIENTRY x360_glLinkProgram(GLuint name)
 	program->linked = vertex && fragment && shader_compile(vertex) && shader_compile(fragment);
 	if (program->linked)
 		program_uniforms(program, vertex, fragment);
+	if (constants_program == program)
+		constants_program = NULL;
+	program->vertex_dirty_low = program->pixel_dirty_low = 256;
+	program->vertex_dirty_high = program->pixel_dirty_high = -1;
 }
 
 static void APIENTRY x360_glGetProgramiv(GLuint name, GLenum parameter, GLint *value)
@@ -4469,9 +5114,11 @@ static void x360_gl_swap_timed(void)
 		}
 	}
 	D3DDevice_Present(gl.device);
+	shadow_forget();
 	gl.bound_screen = FALSE;
 	gl.bound_color = (D3DSurface *)1;
 	rings_next_frame();
+	texture_memory_check();
 	stats.frames++;
 	stats.frame_ms += stats_ms_since(stats.frame_start);
 	STATS_NOW(stats.frame_start);
@@ -4481,10 +5128,10 @@ static void x360_gl_swap_timed(void)
 		if (stats.frames)
 		{
 			x360_log("gl: %lu frames, %.1f ms a frame; a frame: %lu draws, %lu KB of draw data; waits: %lu idle "
-				"(%.1f ms), %lu fence (%.1f ms); %lu textures deleted",
+				"(%.1f ms), %lu fence (%.1f ms); %lu textures deleted, %lu dropped for memory, %lu made again",
 				stats.frames, stats.frame_ms / stats.frames, (gl.draws - stats.draws) / stats.frames,
 				stats.ring_bytes / stats.frames / 1024, stats.idle_waits, stats.idle_wait_ms, stats.fence_waits,
-				stats.fence_wait_ms, stats.textures_deleted);
+				stats.fence_wait_ms, stats.textures_deleted, stats.textures_dropped, stats.textures_reloaded);
 			x360_log("gl: a frame's time in the GL layer: draws %.1f ms, textures %.1f ms, buffers %.1f ms, "
 				"present %.1f ms; the rest (the game) %.1f ms; a draw's parts: program and state %.1f ms, indices %.1f ms, "
 				"vertices %.1f ms, draw calls %.1f ms", stats.draw_ms / stats.frames,
@@ -4497,6 +5144,7 @@ static void x360_gl_swap_timed(void)
 		}
 		stats.last_report = GetTickCount();
 		stats.frames = stats.idle_waits = stats.fence_waits = stats.ring_bytes = stats.textures_deleted = 0;
+		stats.textures_dropped = stats.textures_reloaded = 0;
 		stats.idle_wait_ms = stats.fence_wait_ms = stats.frame_ms = 0.0;
 		stats.draw_ms = stats.texture_ms = stats.buffer_ms = stats.present_ms = 0.0;
 		stats.prepare_ms = stats.index_ms = stats.vertices_ms = stats.issue_ms = stats.query_ms = 0.0;

@@ -119,8 +119,9 @@ static struct
 struct texture;
 static void texture_count_phys(struct texture *texture, unsigned long before);
 static void texture_resolve(struct texture *texture);
+static void texture_memory_uncount(struct texture *texture);
 static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
-	float y1, unsigned long width, unsigned long height, BOOL linear);
+	float y1, unsigned long width, unsigned long height, BOOL linear, BOOL to_screen);
 
 #include "edram_under_test.inc"
 
@@ -133,11 +134,13 @@ static void texture_count_phys(struct texture *texture, unsigned long before)
 
 static void texture_resolve(struct texture *texture) { (void)texture; }
 
+static void texture_memory_uncount(struct texture *texture) { (void)texture; }
+
 static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
-	float y1, unsigned long width, unsigned long height, BOOL linear)
+	float y1, unsigned long width, unsigned long height, BOOL linear, BOOL to_screen)
 {
 	(void)source; (void)u0; (void)v0; (void)u1; (void)v1; (void)x0; (void)y0; (void)x1; (void)y1;
-	(void)width; (void)height; (void)linear;
+	(void)width; (void)height; (void)linear; (void)to_screen;
 }
 
 /* ---------- the game's targets */

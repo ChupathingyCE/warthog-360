@@ -6,13 +6,7 @@
 
 Blood Gulch loads, draws and plays (driven in a Ghost on hardware, still a little laggy). Networking works on hardware: the console lists and joins servers (below). A multiplayer game plays on the console. The campaign is not a goal yet. There is no high-res HUD on the 360: it is built without the high-res HUD's pictures, and the maps' own HUD is drawn. The build is a console build (`HALO_CONSOLE`): the desktop extras stay out until the baseline holds, then come back one at a time. It is sized for the 360's 512 MB, not the original Xbox's 64 MB.
 
-Test build 2 (2026-11-05, game 0.9.0) reaches the main menu and plays Blood Gulch in Xenia ("Smoke test in Xenia", below). It has not run on a console yet. Test builds hold 32 players (`--console-players 32`; the game's default is 16).
-
-Known issues, under investigation:
-
-- A progressive, film-grain-like noise in the picture over time.
-- HUD and reticle vertices popping.
-- Lag.
+Test builds run on real consoles with testers, and each is checked in Xenia first ("Smoke test in Xenia", below). Test builds hold 32 players (`--console-players 32`; the game's default is 16). The known issues are in the repository's README.
 
 How it is put together:
 
@@ -31,6 +25,8 @@ The game draws with one of two renderers, chosen by `display.renderer` in `game:
 - `"native"`, a test: the game's Direct3D 8 device handed to the console's Direct3D 9 directly, without the OpenGL layer (the game's `port/linux/src/d3d8_console.inl` over its `console_renderer.h`, defined here by `src/d3d8_x360.c`). Textures are made once (in the GPU's tiled layout with `console.native_tiled_textures = true`, a test), shaders are compiled once and kept in `game:\shaders`, state and constants are set only when they change, the map's vertices and indices are read where they are, and occlusion queries are never waited for. If it cannot start, the game draws with `"gl"`.
 
 `configure.py --x360-renderer native` makes `"native"` the default of a new `config.toml`. Either renderer can be set in the file afterwards.
+
+Shaders are compiled on the console by the SDK's compiler, about 70 ms each, the first time a draw needs one, and kept in `game:\shaders` (`src/x360_shader_cache.c`) so the next run reads them instead. A cache ships with the build so the first run does too: `shaders/` (the compiled shaders, one file each, named by a hash of the HLSL text and the cache's version) and `shader_cache.bin` (the game's own list of the shaders it has drawn with, which it compiles at start-up, so with both in place every shader the list knows is a file read while the game starts, not a compile in the middle of play). `tools/xbox360_shader_cache.sh` makes the cache from a build by running it through every campaign and multiplayer map in Xenia (`tools/xenia_smoke_remote.sh`, one run a map, each boot given the list the last run left) and keeping what the console compiled; it goes in `port/xbox360/shaders`, and `tools/xbox360_package.py` puts it in the game's folder. It is only as good as the build it was made from: a shader whose text or cache version differs is never read and is compiled on the console as before, so a stale cache costs nothing but the compile. Make it again after a change to `src/x360_glsl.c`, to the game's renderer, or to `CACHE_VERSION`.
 
 Every build logs a frame's counts and times every 10 seconds (`src/x360_frame_counters.c`): the frame rate, the time in the game, the renderer and the present, the free memory, and what a frame sets on the device and copies for the GPU.
 
@@ -63,15 +59,17 @@ Put `default.xex` in a folder of its own on the console (`Hdd1:\Games\Warthog360
 
 `tools/xenia_smoke.sh` boots `default.xex` in Xenia Canary (the Linux build) twice: once to the main menu, then straight into Blood Gulch, which it runs for 60 seconds. It needs Xvfb, Vulkan (Mesa's llvmpipe works, slowly), python3, a C compiler, and a script that makes a data root of links to your own maps. The maps are linked, never copied. Xenia's settings, content and cache stay in the test's folder. A pass in Xenia is not a pass on an Xbox 360.
 
+A phase fails on a halt, on Xenia leaving, on the time running out, on a shader that did not compile (`gl: a ... shader did not compile`, or the native renderer's), or when the game reported no frames drawn (its `x360: frame (...)` lines; the map's must come after its scripts are read). Each phase's folder has `result.txt` with the reason, the game's logs, and a screenshot every 15 seconds in `shots/` (`--shots-every`, 0 for none; needs ImageMagick). `summary.txt` has both phases on a line each.
+
 From a Mac, run it on a Linux machine you can reach over ssh:
 
 ```sh
 tools/xenia_smoke_remote.sh --host linux-box \
-    --xenia '~/emulators/xenia-canary/xenia_canary' \
-    --maps-root '~/halo-maps/new-data-root.sh'
+    --xenia '~/xenia-canary/xenia_canary' \
+    --maps-root '~/my-maps/make-data-root.sh'
 ```
 
-`XENIA_SMOKE_HOST`, `XENIA_SMOKE_XENIA` and `XENIA_SMOKE_MAPS_ROOT` stand in for the three options. The script copies the build to a new folder on the host, runs the test there, brings the logs back to `build/xbox360/xenia-smoke`, and removes the folder (`--keep` leaves it). `--map`, `--seconds` and `--timeout` go to the test.
+`XENIA_SMOKE_HOST`, `XENIA_SMOKE_XENIA` and `XENIA_SMOKE_MAPS_ROOT` stand in for the three options. The script copies the build to a new folder on the host, runs the test there, brings the logs back to `build/xbox360/xenia-smoke`, and removes the folder (`--keep` leaves it). `--map`, `--seconds`, `--timeout` and `--shots-every` go to the test.
 
 What the test works around in Xenia:
 
@@ -82,6 +80,8 @@ What the test works around in Xenia:
 ## Developer tools
 
 A normal build has none of the following. Configured with `--console-debug-tools` (`HALO_CONSOLE_DEBUG_TOOLS`), the build adds them; the code is kept, off by default:
+
+- The debug build's own developer tools: the profiler and its frame history, the AI, render and collision debug data, and `d:\gamestate.txt`. Without them (`HALO_CONSOLE_NO_DEBUG_TOOLS`, as on the original Xbox), a console command that needs one says so (`game/x360_debug_tools.c`).
 
 - Harness files read from the build's folder: `game:\gl.txt` (one switch per word: `fake_pad`, `log_draws`, `no_draws`, `clear_red`, `index_le`, `log_frame=N`, `dump_at=N` and others, listed in `src/x360_gl.c`) which a normal build ignores. (`d:\camera.txt` is the game's own saved camera, read only when a script calls `director_load_camera`, as on the Xbox.) `fake_pad` keeps controller 1 connected at rest for automated runs; a real controller is detected without it. `init.txt` is the game's own start-up file and is read in every build.
 - The probe triangle at start-up, the main loop's pulse and the frame profiler in the log.
@@ -108,7 +108,7 @@ Works on hardware (RGH). The network comes up as Butter and Jelly (a Jellyfin cl
 
 At start-up a self-test runs on a thread of its own (`src/x360_online.c`) and logs `net test:` lines to `port.txt` and the debug channel: XNet and the link, a UDP datagram to the console's own port read back, `warthog.milenko.org` looked up, and `GET /v1/console/games?coop=1&packs=1`. The list comes over HTTPS from stats.chupathingy.org first, the site's key pinned (the game's `port/console/https`, over `src/x360_https.c`); if that fails it comes over plain HTTP from `warthog.milenko.org`, and a refused key or name keeps it on plain HTTP for the rest of the run. The same thread fetches the signed legacy table when it is due, kept beside `config.toml`. That list is the Multiplayer menu's ONLINE GAMES (`game/x360_browser_screen.c`, `HALO_CONSOLE_ONLINE_GAMES`): the original Xbox's screen and list parser (ChupathingyCE/warthog-xbox), joining a game through its invite and internet play's tunnel, as on the Xbox. X refreshes, Y changes the filter (all games, multiplayer or co-op, as Join Game's), B goes back. Co-op games are listed too: the 360 plays network co-op.
 
-Start on ONLINE GAMES opens DELTA PROFILE (the game's `port/console/link`, `src/x360_console_link.c`): A asks for a code, shown as XXXX-XXXX with its QR code, to enter at stats.chupathingy.org/connect while signed in; then A on the console confirms. The console makes its own key the first time (`game:\delta_device.key`; it never leaves the console, and nothing secret goes over the plain HTTP the console uses) and keeps the profile's handle in `game:\delta_link.txt`. The screen then shows DELTA: @handle, and once the 360 speaks Delta Peer its PROFILE carries the console's ID, so its games count toward the profile. Unlink it on the site's profile page. Keep `delta_device.key` to yourself.
+Start on ONLINE GAMES opens DELTA PROFILE (the game's `port/console/link`, `src/x360_console_link.c`): A asks for a code, shown as XXXX-XXXX with its QR code, to enter at stats.chupathingy.org/connect while signed in; then A on the console confirms. The console makes its own key the first time (`game:\delta_device.key`; it never leaves the console, and nothing secret goes over the plain HTTP the console uses) and keeps the profile's handle in `game:\delta_link.txt`. The screen then shows DELTA: @handle. The 360's Delta Peer PROFILE carries the console's ID, so its games count toward the profile. Unlink it on the site's profile page. Keep `delta_device.key` to yourself.
 
 Byte order: the game's own network code converts every message, game advertisement and settings record to the wire's little-endian on a big-endian build (`HALO_BIG_ENDIAN`; the game's `port/linux/game/network_distributed.c`). The start-up self-test writes `net test: byte order ok` to `port.txt` when the conversion matches the PC's bytes (`network_wire_self_test`).
 
@@ -118,7 +118,7 @@ Logs never show an address, only its kind (private, public).
 
 ## Notes for the port
 
-From earlier ports built with OXDK's Xbox 360 tools, and what phase 0 is built around:
+From earlier ports built with OXDK's Xbox 360 tools:
 
 - Paths: backslashes only, and device names longer than a letter (`game:`). A forward slash fails silently on writes, and `path[1] == ':'` checks miss the device.
 - `game:` is writable when launched from Aurora; `Hdd:` and `Hdd1:` may not be mounted.

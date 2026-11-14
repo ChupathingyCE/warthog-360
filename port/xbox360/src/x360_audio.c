@@ -38,6 +38,9 @@ static struct
 	BOOL running, dry;
 	unsigned long underruns, underruns_logged, submitted;
 	DWORD last_report;
+	/* the period's longest mix of a buffer and longest wait between two
+	mixes, in performance counter ticks (logged with the underruns) */
+	LONGLONG mix_longest, gap_longest, last_mix_end, ticks_per_ms;
 } audio;
 
 /* the stream SDL hands back (any non-NULL value): this file's state */
@@ -60,17 +63,33 @@ static DWORD WINAPI audio_thread(LPVOID parameter)
 			audio.last_report = GetTickCount();
 			if (audio.underruns != audio.underruns_logged)
 			{
-				x360_log("audio: %lu underruns so far (%lu buffers played)", audio.underruns, audio.submitted);
+				/* (a dropout at 10 ms buffers with three queued means the
+				mixer did not run for 30 ms: the longest mix says whether
+				mixing itself took that long, the longest wait whether the
+				thread was kept from running) */
+				x360_log("audio: %lu underruns so far (%lu buffers played); in 10 s the longest mix %.1f ms, "
+					"the longest wait between mixes %.1f ms", audio.underruns, audio.submitted,
+					(double)audio.mix_longest / (double)audio.ticks_per_ms,
+					(double)audio.gap_longest / (double)audio.ticks_per_ms);
 				audio.underruns_logged = audio.underruns;
 			}
+			audio.mix_longest = audio.gap_longest = 0;
 		}
 		if (state.BuffersQueued < QUEUED)
 		{
 			/* (the mixer's floats for one buffer: it calls
 			SDL_PutAudioStreamData, which submits it) */
 			int wanted = BUFFER_FRAMES * CHANNELS * (int)sizeof(float);
+			LARGE_INTEGER before, after;
 
+			QueryPerformanceCounter(&before);
+			if (audio.last_mix_end && before.QuadPart - audio.last_mix_end > audio.gap_longest)
+				audio.gap_longest = before.QuadPart - audio.last_mix_end;
 			audio.callback(audio.user_data, STREAM, wanted, wanted);
+			QueryPerformanceCounter(&after);
+			audio.last_mix_end = after.QuadPart;
+			if (after.QuadPart - before.QuadPart > audio.mix_longest)
+				audio.mix_longest = after.QuadPart - before.QuadPart;
 			continue;
 		}
 		Sleep(2);
@@ -130,10 +149,19 @@ _Bool SDL_ResumeAudioStreamDevice(void *stream)
 		return 1;
 	audio.running = TRUE;
 	IXAudio2SourceVoice_Start(audio.voice, 0, XAUDIO2_COMMIT_NOW);
+	{
+		LARGE_INTEGER frequency;
+
+		QueryPerformanceFrequency(&frequency);
+		audio.ticks_per_ms = frequency.QuadPart / 1000;
+		if (!audio.ticks_per_ms)
+			audio.ticks_per_ms = 1;
+	}
 	thread = CreateThread(NULL, 0x40000, audio_thread, NULL, CREATE_SUSPENDED, NULL);
 	if (!thread)
 		return 0;
-	/* (on a core of its own, away from the game's) */
+	/* (on a hardware thread of its own: away from the game's core, and not
+	the one the sound engine itself works on) */
 	XSetThreadProcessor(thread, X360_THREAD_AUDIO);
 	SetThreadPriority(thread, THREAD_PRIORITY_ABOVE_NORMAL);
 	ResumeThread(thread);
