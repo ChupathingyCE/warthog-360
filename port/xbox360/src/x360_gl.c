@@ -530,6 +530,9 @@ static struct
 	/* the present blit's shaders */
 	D3DVertexShader *blit_vertex;
 	D3DPixelShader *blit_pixel;
+	/* the present's, with display.gamma (gl.gamma_power = 1 / gamma; 0 until read) */
+	D3DPixelShader *blit_gamma_pixel;
+	float gamma_power;
 	D3DPixelShader *green_pixel;
 	D3DVertexShader *simple_vertex, *topdown_vertex;
 	struct texture *presented;
@@ -577,6 +580,15 @@ static const char blit_vertex_source[] =
 static const char blit_pixel_source[] =
 	"sampler2D source : register(s0);\n"
 	"float4 main(float2 uv : TEXCOORD0) : COLOR { return tex2D(source, uv); }\n";
+/* the present with display.gamma: the picture raised to 1 / gamma (c0.x) */
+static const char blit_gamma_pixel_source[] =
+	"sampler2D source : register(s0);\n"
+	"float4 power : register(c0);\n"
+	"float4 main(float2 uv : TEXCOORD0) : COLOR\n"
+	"{ float4 c = tex2D(source, uv); c.rgb = pow(max(c.rgb, 0.0), power.x); return c; }\n";
+
+/* (the game's settings: port_config.c) */
+double config_real(const char *name);
 
 static BOOL gl_ready(void)
 {
@@ -629,6 +641,12 @@ static BOOL gl_ready(void)
 	if (code)
 	{
 		gl.blit_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
+		x360_video_shader_free(code);
+	}
+	code = x360_video_compile(blit_gamma_pixel_source, "ps_3_0", NULL);
+	if (code)
+	{
+		gl.blit_gamma_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
 		x360_video_shader_free(code);
 	}
 	{
@@ -1500,7 +1518,7 @@ landed in the 3D view. */
 static struct texture *edram_targets[EDRAM_TARGETS];
 
 static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
-	float y1, unsigned long width, unsigned long height, BOOL linear);
+	float y1, unsigned long width, unsigned long height, BOOL linear, BOOL to_screen);
 static void texture_resolve(struct texture *texture);
 
 static void edram_forget(struct texture *texture)
@@ -1582,7 +1600,7 @@ static void edram_claim(struct texture *texture)
 	gl.bound_color = texture->surface;
 	gl.bound_depth = NULL;
 	blit_quad(texture, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, (float)texture->width, (float)texture->height,
-		texture->width, texture->height, FALSE);
+		texture->width, texture->height, FALSE, FALSE);
 }
 
 static BOOL texture_surface(struct texture *texture)
@@ -3455,7 +3473,7 @@ static void console_gl_draw_again(GLenum mode, GLint first, GLsizei count)
 /* ---------- blits: a textured quad */
 
 static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
-	float y1, unsigned long width, unsigned long height, BOOL linear)
+	float y1, unsigned long width, unsigned long height, BOOL linear, BOOL to_screen)
 {
 	float vertices[4][6];
 	int corner;
@@ -3493,7 +3511,16 @@ static void blit_quad(struct texture *source, float u0, float v0, float u1, floa
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_ALL);
 	IDirect3DDevice9_SetVertexDeclaration(gl.device, gl.blit_declaration);
 	IDirect3DDevice9_SetVertexShader(gl.device, gl.blit_vertex);
-	IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_pixel);
+	if (to_screen && gl.blit_gamma_pixel && gl.gamma_power > 0.0f && gl.gamma_power != 1.0f)
+	{
+		/* (display.gamma: the picture raised to 1 / gamma on its way out) */
+		float power[4] = { gl.gamma_power, gl.gamma_power, gl.gamma_power, 1.0f };
+
+		IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_gamma_pixel);
+		IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, power, 1);
+	}
+	else
+		IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_pixel);
 	IDirect3DDevice9_SetTexture(gl.device, 0, source->d3d);
 	IDirect3DDevice9_SetSamplerState(gl.device, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 	IDirect3DDevice9_SetSamplerState(gl.device, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -4070,12 +4097,20 @@ static void APIENTRY x360_glBlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLi
 		width = destination->width;
 		height = destination->height;
 	}
+	if (!gl.draw_framebuffer && gl.gamma_power == 0.0f)
+	{
+		double gamma = config_real("display.gamma");
+
+		gl.gamma_power = gamma > 0.1 && gamma < 10.0 ? (float)(1.0 / gamma) : 1.0f;
+		if (gl.gamma_power != 1.0f)
+			x360_log("gl: display.gamma %.2f: the picture raised to %.3f on its way out", gamma, gl.gamma_power);
+	}
 	u0 = (float)sx0 / (float)source->width;
 	u1 = (float)sx1 / (float)source->width;
 	v0 = (float)sy0 / (float)source->height;
 	v1 = (float)sy1 / (float)source->height;
 	blit_quad(source, u0, v0, u1, v1, (float)dx0, (float)dy0, (float)dx1, (float)dy1, width, height,
-		filter == GL_LINEAR);
+		filter == GL_LINEAR, !gl.draw_framebuffer);
 	if (!gl.draw_framebuffer)
 		gl.presented = source;
 	targets_written();
