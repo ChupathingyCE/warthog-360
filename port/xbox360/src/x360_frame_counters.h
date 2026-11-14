@@ -34,6 +34,10 @@ struct x360_frame_counters
 	unsigned long ring_bytes, index_bytes, texture_bytes;
 	/* shaders compiled or read from the drive in the period */
 	unsigned long shaders_made;
+	/* the game's locks that asked whether the GPU still reads the memory
+	(xbox360_gpu_hooks.c): all of them, those on memory some draw read in
+	place, those busy (given other storage), those that waited for the GPU */
+	unsigned long lock_asked, lock_marked, lock_busy, lock_waits;
 	/* time base ticks: in the renderer (the game's Direct3D calls, from
 	d3d8_gl.c: console_render_time), in the device layer below it (x360_gl.c
 	or d3d8_x360.c), and in the present */

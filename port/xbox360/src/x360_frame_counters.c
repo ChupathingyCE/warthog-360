@@ -101,7 +101,7 @@ void x360_frame_counters_present(const char *renderer)
 	x360_log("frame (%s): a frame: %lu draws (%lu in effects), %lu clears, %lu resolves, %lu occlusion queries "
 		"(%lu waits), %lu render states, %lu sampler states, %lu textures, %lu+%lu constants, %lu shaders, "
 		"%lu declarations, %lu streams, %lu index buffers; copied %lu KB vertices, %lu KB indices, %lu KB texels; "
-		"in %lu frames: %lu texture uploads, %lu shaders made",
+		"in %lu frames: %lu texture uploads, %lu shaders made; %lu locks asked (%lu on memory drawn in place, %lu busy, %lu waited)",
 		renderer, (unsigned long)(c->draws / frames), (unsigned long)(c->effect_draws / frames),
 		(unsigned long)(c->clears / frames), (unsigned long)(c->resolves / frames),
 		(unsigned long)(c->queries / frames), (unsigned long)(c->query_waits / frames),
@@ -111,7 +111,8 @@ void x360_frame_counters_present(const char *renderer)
 		(unsigned long)(c->shaders / frames), (unsigned long)(c->declarations / frames),
 		(unsigned long)(c->streams / frames), (unsigned long)(c->index_buffers / frames),
 		(unsigned long)(c->ring_bytes / frames / 1024), (unsigned long)(c->index_bytes / frames / 1024),
-		(unsigned long)(c->texture_bytes / frames / 1024), c->frames, c->texture_uploads, c->shaders_made);
+		(unsigned long)(c->texture_bytes / frames / 1024), c->frames, c->texture_uploads, c->shaders_made,
+		c->lock_asked, c->lock_marked, c->lock_busy, c->lock_waits);
 	memset(c, 0, sizeof(*c));
 	period_start = now;
 }

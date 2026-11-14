@@ -44,6 +44,7 @@ the first time.
 #include "x360_port.h"
 #include "x360_glsl.h"
 #include "x360_frame_counters.h"
+#include "x360_gpu_reads.h"
 
 /* the device calls a frame makes, counted for the log every 10 seconds
 (x360_frame_counters.h); the calls below are the SDK's inline functions */
@@ -525,11 +526,16 @@ static struct
 	unsigned long vertex_ring_offset, index_ring_offset;
 	DWORD frame_fences[2];
 	int frame_half;
+	/* the frame being built, from 1 (never 0 in its low 16 bits: x360_gpu_reads.h) */
+	unsigned long frame_number;
 	/* vertex declarations made */
 	struct declaration_cache *declarations;
 	/* the present blit's shaders */
 	D3DVertexShader *blit_vertex;
 	D3DPixelShader *blit_pixel;
+	/* the present's, with display.gamma (gl.gamma_power = 1 / gamma; 0 until read) */
+	D3DPixelShader *blit_gamma_pixel;
+	float gamma_power;
 	D3DPixelShader *fill_pixel;
 	D3DPixelShader *green_pixel;
 	D3DVertexShader *simple_vertex, *topdown_vertex;
@@ -584,6 +590,15 @@ static const char fill_pixel_source[] =
 static const char blit_pixel_source[] =
 	"sampler2D source : register(s0);\n"
 	"float4 main(float2 uv : TEXCOORD0) : COLOR { return tex2D(source, uv); }\n";
+/* the present with display.gamma: the picture raised to 1 / gamma (c0.x) */
+static const char blit_gamma_pixel_source[] =
+	"sampler2D source : register(s0);\n"
+	"float4 power : register(c0);\n"
+	"float4 main(float2 uv : TEXCOORD0) : COLOR\n"
+	"{ float4 c = tex2D(source, uv); c.rgb = pow(max(c.rgb, 0.0), power.x); return c; }\n";
+
+/* (the game's settings: port_config.c) */
+double config_real(const char *name);
 
 static BOOL gl_ready(void)
 {
@@ -595,6 +610,7 @@ static BOOL gl_ready(void)
 	if (!gl.device)
 		return FALSE;
 	state_defaults();
+	gl.frame_number = 1;
 	gl.vertex_ring = x360_phys_alloc(X360_PHYS_OTHER, RING_VERTEX_SIZE, PAGE_READWRITE | PAGE_WRITECOMBINE);
 	gl.index_ring = x360_phys_alloc(X360_PHYS_OTHER, RING_INDEX_SIZE, PAGE_READWRITE | PAGE_WRITECOMBINE);
 	if (!gl.vertex_ring || !gl.index_ring)
@@ -636,6 +652,12 @@ static BOOL gl_ready(void)
 	if (code)
 	{
 		gl.blit_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
+		x360_video_shader_free(code);
+	}
+	code = x360_video_compile(blit_gamma_pixel_source, "ps_3_0", NULL);
+	if (code)
+	{
+		gl.blit_gamma_pixel = D3DDevice_CreatePixelShader(x360_video_shader_code(code));
 		x360_video_shader_free(code);
 	}
 	code = x360_video_compile(fill_pixel_source, "ps_3_0", NULL);
@@ -1163,6 +1185,79 @@ static void rings_next_frame(void)
 	}
 	gl.vertex_ring_offset = gl.frame_half * (RING_VERTEX_SIZE / 2);
 	gl.index_ring_offset = gl.frame_half * (RING_INDEX_SIZE / 2);
+	gl.frame_number++;
+	if (!(unsigned short)gl.frame_number)
+		gl.frame_number++;
+}
+
+/* ---------- the window's memory read in place (x360_gpu_reads.h)
+
+The game's D3D8 layer asks about a resource before a lock writes it
+(halo_resource_busy and halo_resource_wait, xbox360_gpu_hooks.c): busy
+while a frame whose draws read it in place is not through on the GPU. The
+frame being built always is; the last frame is until its fence has passed;
+older frames were waited for when their ring half was taken again
+(rings_next_frame). */
+
+extern unsigned int xbox_address_space_base;
+
+static unsigned long window_offset(const void *data)
+{
+	return (unsigned long)((unsigned int)(UINT_PTR)data - xbox_address_space_base) - 0x80000000UL;
+}
+
+static void reads_mark(const void *data, unsigned long size)
+{
+	x360_gpu_reads_mark(window_offset(data), size, (unsigned short)gl.frame_number);
+}
+
+BOOL x360_gl_active(void)
+{
+	return gl.device != NULL;
+}
+
+unsigned long x360_gl_memory_read_frame(const void *data, unsigned long size)
+{
+	return x360_gpu_reads_newest(window_offset(data), size, (unsigned short)gl.frame_number);
+}
+
+BOOL x360_gl_frame_done(unsigned long frame)
+{
+	unsigned short current = (unsigned short)gl.frame_number;
+
+	if (!frame || !gl.device)
+		return TRUE;
+	if ((unsigned short)frame == current)
+		return FALSE;
+	if ((unsigned short)frame == (unsigned short)(current - 1))
+	{
+		DWORD fence = gl.frame_fences[gl.frame_half ^ 1];
+
+		return !fence || !D3DDevice_IsFencePending(fence);
+	}
+	return TRUE;
+}
+
+void x360_gl_frame_wait(unsigned long frame)
+{
+	LARGE_INTEGER start;
+
+	if (x360_gl_frame_done(frame))
+		return;
+	STATS_NOW(start);
+	if ((unsigned short)frame == (unsigned short)gl.frame_number)
+	{
+		/* (this frame's draws so far) */
+		DWORD fence = IDirect3DDevice9_InsertFence(gl.device);
+
+		if (fence)
+			D3DDevice_BlockOnFence(fence);
+	}
+	else
+		D3DDevice_BlockOnFence(gl.frame_fences[gl.frame_half ^ 1]);
+	stats.fence_waits++;
+	stats.fence_wait_ms += stats_ms_since(start);
+	X360_COUNT(lock_waits, 1);
 }
 
 /* ---------- textures */
@@ -1513,7 +1608,7 @@ landed in the 3D view. */
 static struct texture *edram_targets[EDRAM_TARGETS];
 
 static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
-	float y1, unsigned long width, unsigned long height, BOOL linear);
+	float y1, unsigned long width, unsigned long height, BOOL linear, BOOL to_screen);
 static void texture_resolve(struct texture *texture);
 
 static void edram_forget(struct texture *texture)
@@ -1595,7 +1690,7 @@ static void edram_claim(struct texture *texture)
 	gl.bound_color = texture->surface;
 	gl.bound_depth = NULL;
 	blit_quad(texture, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, (float)texture->width, (float)texture->height,
-		texture->width, texture->height, FALSE);
+		texture->width, texture->height, FALSE, FALSE);
 }
 
 static BOOL texture_surface(struct texture *texture)
@@ -2912,6 +3007,12 @@ static BOOL setup_vertices(struct shader *vertex, unsigned long vertex_start, un
 						return FALSE;
 					ring_copy(copy, buffer->data + binding->offset, bytes);
 				}
+				else if (buffer->alias)
+				{
+					/* (read in place: the GPU may still be reading it when the
+					game next writes it, which a lock of it asks about) */
+					reads_mark(copy, bytes);
+				}
 				if (draw_base_vertex && !deindex_indices)
 				{
 					copy += draw_base_vertex * (long)stride;
@@ -3468,7 +3569,7 @@ static void console_gl_draw_again(GLenum mode, GLint first, GLsizei count)
 /* ---------- blits: a textured quad */
 
 static void blit_quad(struct texture *source, float u0, float v0, float u1, float v1, float x0, float y0, float x1,
-	float y1, unsigned long width, unsigned long height, BOOL linear)
+	float y1, unsigned long width, unsigned long height, BOOL linear, BOOL to_screen)
 {
 	float vertices[4][6];
 	int corner;
@@ -3506,7 +3607,16 @@ static void blit_quad(struct texture *source, float u0, float v0, float u1, floa
 	IDirect3DDevice9_SetRenderState(gl.device, D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_ALL);
 	IDirect3DDevice9_SetVertexDeclaration(gl.device, gl.blit_declaration);
 	IDirect3DDevice9_SetVertexShader(gl.device, gl.blit_vertex);
-	IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_pixel);
+	if (to_screen && gl.blit_gamma_pixel && gl.gamma_power > 0.0f && gl.gamma_power != 1.0f)
+	{
+		/* (display.gamma: the picture raised to 1 / gamma on its way out) */
+		float power[4] = { gl.gamma_power, gl.gamma_power, gl.gamma_power, 1.0f };
+
+		IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_gamma_pixel);
+		IDirect3DDevice9_SetPixelShaderConstantF(gl.device, 0, power, 1);
+	}
+	else
+		IDirect3DDevice9_SetPixelShader(gl.device, gl.blit_pixel);
 	IDirect3DDevice9_SetTexture(gl.device, 0, source->d3d);
 	IDirect3DDevice9_SetSamplerState(gl.device, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 	IDirect3DDevice9_SetSamplerState(gl.device, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
@@ -4164,12 +4274,20 @@ static void APIENTRY x360_glBlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLi
 		width = destination->width;
 		height = destination->height;
 	}
+	if (!gl.draw_framebuffer && gl.gamma_power == 0.0f)
+	{
+		double gamma = config_real("display.gamma");
+
+		gl.gamma_power = gamma > 0.1 && gamma < 10.0 ? (float)(1.0 / gamma) : 1.0f;
+		if (gl.gamma_power != 1.0f)
+			x360_log("gl: display.gamma %.2f: the picture raised to %.3f on its way out", gamma, gl.gamma_power);
+	}
 	u0 = (float)sx0 / (float)source->width;
 	u1 = (float)sx1 / (float)source->width;
 	v0 = (float)sy0 / (float)source->height;
 	v1 = (float)sy1 / (float)source->height;
 	blit_quad(source, u0, v0, u1, v1, (float)dx0, (float)dy0, (float)dx1, (float)dy1, width, height,
-		filter == GL_LINEAR);
+		filter == GL_LINEAR, !gl.draw_framebuffer);
 	if (!gl.draw_framebuffer)
 		gl.presented = source;
 	targets_written();
