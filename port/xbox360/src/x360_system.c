@@ -969,6 +969,16 @@ void *SDL_GL_GetProcAddress(const char *name)
 
 /* (the audio device: x360_audio.c) */
 
+/* a path as the player finds it: a relative one is below the title's folder,
+game:\ (x360_path), which the missing maps screen shows (the game's
+source/interface/missing_maps_screen.c) */
+void console_path_shown(const char *path, char *shown, unsigned long size)
+{
+	if (path[0] == '.' && (path[1] == '/' || path[1] == '\\'))
+		path += 2;
+	x360_path(path, shown, size);
+}
+
 /* ---------- leaving */
 
 void console_exit_to_launcher(void)
