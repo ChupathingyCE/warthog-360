@@ -42,7 +42,12 @@ from tools.embed_assets import hud_asset_inputs
 from tools.linux_build import (EXPAT_DIR, KCP_DIR, MONOCYPHER_DIR, MUSL_MATH_DIR, QRCODEGEN_DIR, TOML_DIR,
                                XDK_INCLUDE, ZLIB_DEFINES, ZLIB_DIR, ZLIB_SOURCES)
 from tools.ninja_syntax import Writer
-from tools.server_build import SDL_INCLUDE, fetch_sdl_headers
+try:
+    # (the game's own helper for SDL's headers)
+    from tools.sdl_headers import SDL_INCLUDE, fetch_sdl_headers
+except ImportError:
+    # (a game from before tools/sdl_headers.py)
+    from tools.server_build import SDL_INCLUDE, fetch_sdl_headers
 from tools.version import version
 
 # this repository's tools (the build's stamp), beside the port
