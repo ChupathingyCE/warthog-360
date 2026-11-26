@@ -3963,6 +3963,26 @@ static void APIENTRY x360_glBindSampler(GLuint unit, GLuint sampler)
 	if (unit < TEXTURE_UNITS)
 		gl.samplers[unit] = sampler;
 }
+static void APIENTRY x360_glDeleteSamplers(GLsizei n, const GLuint *names)
+{
+	GLsizei index;
+
+	for (index = 0; index < n; index++)
+	{
+		struct sampler *sampler = object_get(names[index], _object_sampler);
+		int unit;
+
+		if (!sampler)
+			continue;
+		free(sampler);
+		objects[names[index]].type = _object_none;
+		for (unit = 0; unit < TEXTURE_UNITS; unit++)
+		{
+			if (gl.samplers[unit] == names[index])
+				gl.samplers[unit] = 0;
+		}
+	}
+}
 static void APIENTRY x360_glSamplerParameteri(GLuint sampler, GLenum name, GLint value)
 {
 	texture_parameter(NULL, object_get(sampler, _object_sampler), name, &value, NULL);
@@ -4055,6 +4075,9 @@ static void APIENTRY x360_glFramebufferTexture2D(GLenum target, GLenum attachmen
 }
 
 static void APIENTRY x360_glDrawBuffers(GLsizei n, const GLenum *buffers) { (void)n; (void)buffers; }
+/* (a framebuffer's reads are of its one color attachment, as glDrawBuffers's
+writes are: the OpenSauce post-processing's choice of another is not kept) */
+static void APIENTRY x360_glReadBuffer(GLenum buffer) { (void)buffer; }
 static GLenum APIENTRY x360_glCheckFramebufferStatus(GLenum target) { (void)target; return GL_FRAMEBUFFER_COMPLETE; }
 
 static void APIENTRY x360_glGenRenderbuffers(GLsizei n, GLuint *names)
@@ -5190,7 +5213,7 @@ static const struct
 	ENTRY(glClearDepth) ENTRY(glClearStencil) ENTRY(glClipControl) ENTRY(glColorMask) ENTRY(glCompileShader)
 	ENTRY(glCompressedTexImage2D) ENTRY(glCompressedTexImage3D) ENTRY(glCreateProgram)
 	ENTRY(glCreateShader) ENTRY(glCullFace) ENTRY(glDeleteBuffers) ENTRY(glDeleteProgram)
-	ENTRY(glDeleteFramebuffers) ENTRY(glDeleteRenderbuffers) ENTRY(glDeleteShader) ENTRY(glDeleteTextures) ENTRY(glDepthFunc) ENTRY(glDepthMask)
+	ENTRY(glDeleteFramebuffers) ENTRY(glDeleteRenderbuffers) ENTRY(glDeleteSamplers) ENTRY(glDeleteShader) ENTRY(glDeleteTextures) ENTRY(glDepthFunc) ENTRY(glDepthMask)
 	ENTRY(glDepthRange) ENTRY(glDisable) ENTRY(glDisableVertexAttribArray) ENTRY(glDrawArrays) ENTRY(glDrawBuffers)
 	ENTRY(glDrawElements) ENTRY(glDrawElementsBaseVertex) ENTRY(glEnable) ENTRY(glEnableVertexAttribArray)
 	ENTRY(glEndQuery) ENTRY(glFinish) ENTRY(glFlush) ENTRY(glFramebufferRenderbuffer) ENTRY(glFramebufferTexture2D)
@@ -5199,7 +5222,7 @@ static const struct
 	ENTRY(glGetIntegerv) ENTRY(glGetProgramInfoLog) ENTRY(glGetProgramiv) ENTRY(glGetQueryBufferObjectuiv)
 	ENTRY(glGetQueryObjectuiv) ENTRY(glGetShaderInfoLog) ENTRY(glGetShaderiv) ENTRY(glGetString) ENTRY(glGetTexImage)
 	ENTRY(glGetUniformLocation) ENTRY(glIsEnabled) ENTRY(glLineWidth) ENTRY(glLinkProgram) ENTRY(glMapBufferRange)
-	ENTRY(glPixelStorei) ENTRY(glPolygonMode) ENTRY(glPolygonOffset) ENTRY(glReadPixels)
+	ENTRY(glPixelStorei) ENTRY(glPolygonMode) ENTRY(glPolygonOffset) ENTRY(glReadBuffer) ENTRY(glReadPixels)
 	ENTRY(glRenderbufferStorageMultisample) ENTRY(glSamplerParameterf) ENTRY(glSamplerParameterfv)
 	ENTRY(glSamplerParameteri) ENTRY(glScissor) ENTRY(glShaderSource) ENTRY(glStencilFunc) ENTRY(glStencilMask)
 	ENTRY(glStencilOp) ENTRY(glTexImage2D) ENTRY(glTexImage3D) ENTRY(glTexParameterf) ENTRY(glTexParameterfv)

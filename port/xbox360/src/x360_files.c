@@ -246,6 +246,21 @@ int posix_rename_directory(const char *from, const char *to)
 	return 0;
 }
 
+/* (as on Windows: MoveFileEx replaces a file there, plain MoveFile never does) */
+int posix_replace_file(const char *from, const char *to)
+{
+	char console_from[MAX_PATH], console_to[MAX_PATH];
+
+	x360_path(from, console_from, sizeof(console_from));
+	x360_path(to, console_to, sizeof(console_to));
+	if (!MoveFileExA(console_from, console_to, MOVEFILE_REPLACE_EXISTING))
+	{
+		errno = x360_errno_from_error(GetLastError());
+		return -1;
+	}
+	return 0;
+}
+
 int posix_make_directory(const char *path)
 {
 	char console_path[MAX_PATH];

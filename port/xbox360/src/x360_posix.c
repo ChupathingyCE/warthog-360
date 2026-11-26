@@ -651,6 +651,16 @@ int munmap(void *address, size_t length)
 	return 0;
 }
 
+/* (sys/mman.h's, as win32_posix.c has it: the mapping calls here keep no
+error of their own beyond errno, so the reason is empty and the caller says
+errno's) */
+unsigned long mmap_last_error(char *text, size_t size)
+{
+	if (text && size)
+		text[0] = 0;
+	return 0;
+}
+
 /* page protection: the console's title memory is not protected per page
 here (the texture write watch is off: x360_memory.c) */
 int mprotect(void *address, size_t length, int protection)
