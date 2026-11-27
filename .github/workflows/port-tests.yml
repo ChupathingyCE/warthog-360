@@ -21,7 +21,10 @@ concurrency:
 
 jobs:
   host:
-    runs-on: macos-latest
+    # (nothing here needs a Mac: clang, as on macOS, with its sanitizers)
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang
     steps:
       - uses: actions/checkout@v4
         with:
